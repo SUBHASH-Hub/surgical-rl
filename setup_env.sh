@@ -18,6 +18,7 @@ export PYTHONPATH=/home/ubuntu/surgical_robot_lapgym_ws/sofa_install/plugins/Sof
 # SOFA uses these to find its plugins and configuration at runtime
 export SOFA_ROOT=/home/ubuntu/surgical_robot_lapgym_ws/sofa_install
 export SOFA_PLUGIN_PATH=/home/ubuntu/surgical_robot_lapgym_ws/sofa_install/plugins
+export SOFAPYTHON3_ROOT=/home/ubuntu/surgical_robot_lapgym_ws/sofa_install/plugins/SofaPython3
 
 # --- 4. Confirm everything is active ---
 echo "========================================"
