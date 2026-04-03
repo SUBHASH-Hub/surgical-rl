@@ -91,7 +91,8 @@ class SafeRewardWrapper(gym.Wrapper):
 
         # --- R_collision: linear collision count penalty ---
         # 'collision' in info is a bool; accumulate over episode
-        n_collisions = float(info.get("collision", 0))
+        
+        n_collisions = float(info.get("in_collision", False))
         r_collision = -self.lambda_collision * n_collisions
 
         # --- R_efficiency: constant step cost ---
