@@ -1,0 +1,201 @@
+# surgical-rl/agents/ppo_config.yaml
+#
+# PPO Hyperparameters for Autonomous Tissue Retraction
+# =====================================================
+# Every value here has a clinical or mathematical reason.
+# Changing any value changes agent behaviour in a predictable way.
+#
+# Author: Subhash Arockiadoss
+
+policy: "MlpPolicy"
+# WHY MlpPolicy not CnnPolicy:
+#   Observation is Box(-1,1,(3,)) — 3 floats, not an image.
+#   MLP processes flat vectors. CNN processes spatial grids.
+#   Using CnnPolicy on a 3D vector would be like using a microscope
+#   to read a 3-digit number — wrong tool entirely.
+
+# --- Learning rate ---
+learning_rate: 0.0003
+# WHY 3e-4:
+#   The most empirically validated default for PPO across domains.
+#   Too high (1e-2): policy updates overshoot, training diverges.
+#   Too low (1e-5): learning is stable but takes 10x longer.
+#   Clinical analogy: a surgical trainee who overreacts to every
+#   feedback session learns bad habits; one who ignores feedback
+#   never improves. 3e-4 is the right sensitivity.
+#
+# WHAT TO CHANGE IF: reward curves are noisy → reduce to 1e-4.
+#                    learning is too slow → increase to 5e-4.
+
+# --- Rollout buffer ---
+n_steps: 2048
+# WHY 2048:
+#   Number of steps collected per environment before each PPO update.
+#   Your baseline episode is ~247 steps. 2048 steps = ~8 full episodes
+#   per update. This gives the value function enough data to estimate
+#   returns accurately before updating the policy.
+#
+#   Too small (128): high variance estimates, unstable learning.
+#   Too large (8192): stale data, slow wall-clock time on GTX 1650.
+#
+# CRITICAL FOR YOUR HARDWARE: GTX 1650 has 4GB VRAM. 2048 steps with
+# a 3D observation is ~25KB of data — well within memory limits.
+
+# --- Minibatch size ---
+batch_size: 64
+# WHY 64:
+#   The 2048 collected steps are split into minibatches of 64 for
+#   gradient updates. 2048 / 64 = 32 gradient steps per PPO update.
+#   Larger batches = more stable gradients but less frequent updates.
+#   64 is standard for continuous control tasks of this complexity.
+#
+# RULE: batch_size must divide n_steps exactly.
+#   2048 / 64 = 32.0  ✓
+#   If you change n_steps to 4096, keep batch_size at 64 or 128.
+
+# --- PPO epochs ---
+n_epochs: 10
+# WHY 10:
+#   How many times we reuse the collected 2048 steps for gradient
+#   updates before discarding them and collecting new data.
+#   PPO's clip objective makes it safe to reuse data ~10 times.
+#   Beyond 10: old data diverges too far from current policy,
+#   clip ratio explodes, training destabilises.
+#
+# Clinical analogy: reviewing the same surgical video 10 times
+# extracts most of the learning value. Watching it 50 times
+# gives diminishing returns and reinforces outdated technique.
+
+# --- Discount factor ---
+gamma: 0.99
+# WHY 0.99:
+#   How much the agent values future rewards vs immediate rewards.
+#   gamma=0.99 means a reward 100 steps in the future is worth
+#   0.99^100 = 0.366 of its face value today.
+#
+#   Clinical meaning: the agent cares about completing the full
+#   retraction task (delayed reward), not just immediate collision
+#   avoidance (immediate reward). gamma=0.99 keeps the goal in view.
+#
+#   gamma=0.9: agent becomes short-sighted, ignores goal completion.
+#   gamma=0.999: agent over-weights distant future, slow to respond
+#                to immediate safety signals like collision cost.
+#
+# YOUR EPISODE LENGTH: ~247 steps. At gamma=0.99, the goal reward
+# at step 247 is worth 0.99^247 = 0.085 at step 1. Still visible.
+# At gamma=0.9, it would be worth 0.9^247 ≈ 0.000000006. Invisible.
+
+# --- GAE lambda ---
+gae_lambda: 0.95
+# WHY 0.95:
+#   Generalised Advantage Estimation smoothing parameter.
+#   Controls bias-variance tradeoff in advantage estimates.
+#
+#   gae_lambda=1.0: pure Monte Carlo — unbiased but high variance.
+#                   Noisy gradients, unstable training.
+#   gae_lambda=0.0: pure TD(0) — low variance but high bias.
+#                   Myopic, ignores multi-step consequences.
+#   gae_lambda=0.95: the standard balance for continuous control.
+#
+#   Practical meaning: advantage at step t is a weighted sum of
+#   TD errors from step t to episode end. Lambda=0.95 exponentially
+#   downweights errors from steps far in the future — similar to
+#   how gamma downweights future rewards, but for the advantage.
+
+# --- PPO clip range ---
+clip_range: 0.2
+# WHY 0.2:
+#   This is the epsilon in the PPO clipped objective:
+#   L_CLIP = min(r*A, clip(r, 1-0.2, 1+0.2)*A)
+#
+#   It means: the new policy cannot differ from the old policy by
+#   more than 20% in any single update step.
+#
+#   Clinical analogy: a surgical training protocol that says
+#   "change at most one technique per session." Prevents the
+#   trainee from completely reinventing their approach after
+#   seeing one bad outcome — which would cause overcorrection.
+#
+#   clip_range=0.1: very conservative, slow but stable.
+#   clip_range=0.4: aggressive updates, can destabilise on
+#                   safety-constrained environments like ours.
+
+# --- Entropy coefficient ---
+ent_coef: 0.01
+# WHY 0.01:
+#   Entropy bonus encourages the policy to stay stochastic —
+#   to keep exploring rather than committing too early.
+#   ent_coef=0.01 adds 1% of the entropy to the loss function.
+#
+#   WHY NOT ZERO: without entropy bonus, PPO collapses to a
+#   deterministic policy too early. In surgical retraction,
+#   the agent needs to explore different approach angles before
+#   it finds the optimal retraction path.
+#
+#   WHY NOT HIGH (0.1): too much entropy = the agent never
+#   commits to good actions. It keeps "exploring" even after
+#   finding the right behaviour. Like a surgeon who tries a
+#   new technique on every patient instead of perfecting one.
+
+# --- Value function coefficient ---
+vf_coef: 0.5
+# WHY 0.5:
+#   The total loss is: L = L_policy - ent_coef*L_entropy + vf_coef*L_value
+#   vf_coef=0.5 means value function loss contributes half as much
+#   as policy loss to each gradient update.
+#
+#   The value function is critical for computing good advantages —
+#   a bad value function = bad advantage estimates = noisy gradients.
+#   But we weight it at 0.5 not 1.0 because policy learning is the
+#   primary objective. The value function is the scaffold, not the goal.
+
+# --- Gradient clipping ---
+max_grad_norm: 0.5
+# WHY 0.5:
+#   Clips the global gradient norm to 0.5 before each optimiser step.
+#   Prevents "exploding gradients" — a single bad batch causing a
+#   catastrophically large weight update that destroys the policy.
+#
+#   In SOFA simulation, occasionally a physics timestep produces
+#   an unusual reward spike (collision detection artefact). Without
+#   gradient clipping, this single spike can corrupt 5000 steps of
+#   learned behaviour in one update. With clipping, it is absorbed.
+
+# Network architecture — applied in train_ppo.py not here
+# because activation_fn requires a Python class, not a string.
+# SB3 default (64x64 Tanh) is overridden in train_ppo.py with
+# net_arch=[256,256] and activation_fn=nn.ReLU
+# See: scripts/train_ppo.py build_model()
+policy_kwargs:
+  net_arch: [256, 256]
+  activation_fn: "ReLU"
+# WHY two layers of 256:
+#   The observation is only 3D — but the task requires the agent to
+#   implicitly represent: where am I, where is the goal, what phase
+#   am I in, how should I move. 256 neurons per layer gives enough
+#   capacity to learn these implicit representations.
+#
+#   128-128: underfits — cannot represent the full task structure.
+#   512-512: overfits on 3D obs, wastes compute on GTX 1650.
+#   256-256: standard for continuous control with low-dim obs.
+#
+# WHY ReLU not Tanh:
+#   ReLU is computationally faster and avoids vanishing gradients
+#   in deeper networks. For 2-layer MLPs either works, but ReLU
+#   is the safer default.
+
+# --- Total training timesteps ---
+total_timesteps: 500000
+# WHY 500k:
+#   Your baseline solves the task in ~247 steps.
+#   500k steps = ~2000 episodes for PPO to learn from.
+#   On GTX 1650 at ~2-5 FPS SOFA simulation, this is
+#   approximately 28-70 hours of wall-clock training.
+#
+#   This is Phase 2 target. We will checkpoint every 50k steps
+#   so you can evaluate progress without waiting for completion.
+#   If the agent beats baseline by 100k steps, we stop early.
+
+# --- Logging ---
+tensorboard_log: "./logs/tensorboard"
+verbose: 1

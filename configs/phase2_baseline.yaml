@@ -1,0 +1,63 @@
+# surgical-rl/configs/phase2_baseline.yaml
+#
+# Experiment configuration for Phase 2 PPO training run
+# ======================================================
+# Separates experiment settings from algorithm hyperparameters.
+# ppo_config.yaml = HOW the algorithm learns
+# this file       = WHAT experiment we are running
+#
+# Author: Subhash Arockiadoss
+
+experiment:
+  name: "phase2_ppo_tissue_retraction"
+  seed: 42
+  # WHY seed=42: reproducibility. Every random initialisation —
+  # network weights, environment resets, action sampling — is
+  # deterministic from this seed. Two runs with seed=42 produce
+  # identical results. Essential for debugging and reporting.
+
+environment:
+  env_class: "TissueRetractionV2"
+  wrapper: "SafeRewardWrapper"
+  wrapper_kwargs:
+    lambda_force: 0.5
+    lambda_collision: 0.1      # Phase 0 starting value
+    force_threshold: 0.5       # Newtons — from scene_graph_analysis.md
+    step_penalty: 0.01
+
+# Curriculum phases — lambda_collision tightens each phase
+# Phase 0: explore freely, low collision cost
+# Phase 1: moderate collision awareness
+# Phase 2: strict safety enforcement
+curriculum:
+  phases:
+    - phase: 0
+      lambda_collision: 0.1
+      trigger_episodes: 0        # start here
+    - phase: 1
+      lambda_collision: 0.3
+      trigger_episodes: 500      # advance after 500 episodes
+    - phase: 2
+      lambda_collision: 0.8
+      trigger_episodes: 1000     # advance after 1000 episodes
+
+# Evaluation settings
+evaluation:
+  eval_freq: 10000               # evaluate every 10k training steps
+  n_eval_episodes: 5             # average over 5 episodes
+  baseline_steps: 247            # Phase 1 scripted baseline
+  baseline_collisions: 49
+  baseline_reward: -165.54
+
+# Phase 2 targets — from baseline_metrics.md
+targets:
+  max_steps: 200
+  max_collision_steps: 20
+  min_reward: -100.0
+  max_force_violation_rate: 0.05  # under 5% of steps
+
+# W&B settings
+wandb:
+  project: "surgical-rl-phase2"
+  entity: null                   # set to your W&B username before training
+  tags: ["ppo", "tissue-retraction", "safe-rl", "phase2"]
