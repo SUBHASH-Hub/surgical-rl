@@ -57,5 +57,5 @@ targets:
 # W&B settings
 wandb:
   project: "surgical-rl-phase2"
-  entity: null                   # set to your W&B username before training
+  entity: "subhashtronics-de-montfort-university-leicester"                  # set to your W&B username before training
   tags: ["ppo", "tissue-retraction", "safe-rl", "phase2"]

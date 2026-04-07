@@ -136,31 +136,60 @@ class SafeRewardLoggerCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
+        dones = self.locals.get("dones", [])
 
-        for info in infos:
+        for i, (info, done) in enumerate(zip(infos, dones)):
+            if not done:
+                continue
+
+            # When done=True, SB3's VecEnv puts terminal info
+            # under info["terminal_observation"] and the original
+            # info under info itself — check both locations
+            ep_data = None
+
+            # Location 1: directly in info (before Monitor strips)
             if "episode_safe_reward" in info:
-                ep = info["episode_safe_reward"]
+                ep_data = info["episode_safe_reward"]
 
-                if wandb.run is not None:
-                    wandb.log({
-                        "safe_reward/r_task": ep.get("ep/r_task", 0),
-                        "safe_reward/r_force": ep.get("ep/r_force", 0),
-                        "safe_reward/r_collision": ep.get("ep/r_collision", 0),
-                        "safe_reward/r_total": ep.get("ep/r_total", 0),
-                        "safe_reward/force_violation_rate":
-                            ep.get("ep/force_violation_rate", 0),
-                        "safe_reward/episode_length": ep.get("ep/n_steps", 0),
-                    })
+            # Location 2: SB3 VecEnv stores final info here
+            if ep_data is None and "final_info" in info:
+                final = info["final_info"]
+                if final and "episode_safe_reward" in final:
+                    ep_data = final["episode_safe_reward"]
 
-                # Print to terminal every episode
-                if self.verbose:
-                    print(
-                        f"  ep_len={ep.get('ep/n_steps',0):4d} | "
-                        f"r_total={ep.get('ep/r_total',0):8.3f} | "
-                        f"r_task={ep.get('ep/r_task',0):8.3f} | "
-                        f"collisions={ep.get('ep/r_collision',0):7.3f} | "
-                        f"force_viol={ep.get('ep/force_violation_rate',0):.3f}"
-                    )
+            # Location 3: read directly from the env wrapper
+            if ep_data is None:
+                try:
+                    # Unwrap: Monitor → SafeRewardWrapper
+                    safe_env = self.training_env.envs[0].env
+                    if hasattr(safe_env, '_last_episode_data'):
+                        ep_data = safe_env._last_episode_data
+                except Exception:
+                    pass
+
+            if ep_data is None:
+
+                continue
+
+            if wandb.run is not None:
+
+                wandb.log({
+                    "safe_reward/r_task": ep_data.get("ep/r_task", 0),
+                    "safe_reward/r_force": ep_data.get("ep/r_force", 0),
+                    "safe_reward/r_collision": ep_data.get("ep/r_collision", 0),
+                    "safe_reward/r_total": ep_data.get("ep/r_total", 0),
+                    "safe_reward/force_violation_rate": ep_data.get("ep/force_violation_rate", 0),
+                    "safe_reward/episode_length": ep_data.get("ep/n_steps", 0),
+                })
+
+            if self.verbose:
+                print(
+                    f"  ep_len={ep_data.get('ep/n_steps',0):4d} | "
+                    f"r_total={ep_data.get('ep/r_total',0):8.3f} | "
+                    f"r_task={ep_data.get('ep/r_task',0):8.3f} | "
+                    f"r_coll={ep_data.get('ep/r_collision',0):7.3f} | "
+                    f"force_viol={ep_data.get('ep/force_violation_rate',0):.3f}"
+                )
 
         return True
 

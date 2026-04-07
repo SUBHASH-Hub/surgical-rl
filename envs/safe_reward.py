@@ -59,6 +59,12 @@ class SafeRewardWrapper(gym.Wrapper):
         # Episode-level accumulators for logging
         self._reset_accumulators()
 
+
+        # Stores last episode data so Monitor wrapper cannot strip it
+        # Monitor intercepts info dict on episode end — we preserve
+        # episode data here so SafeRewardLoggerCallback can still read it
+        self._last_episode_data = None
+
     # ------------------------------------------------------------------ #
     #  Core reward decomposition                                           #
     # ------------------------------------------------------------------ #
@@ -150,8 +156,15 @@ class SafeRewardWrapper(gym.Wrapper):
 
         # On episode end, add episode-level summary to info
         if terminated or truncated:
-            info["episode_safe_reward"] = self._episode_safe_accumulators()
+            # Compute episode summary
+            ep_data = self._episode_safe_accumulators()
 
+            # Store in info dict (may be stripped by Monitor)
+            info["episode_safe_reward"] = ep_data
+
+            # ALSO store on self — survives Monitor stripping
+            # SafeRewardLoggerCallback reads from here as fallback
+            self._last_episode_data = ep_data
         return obs, r_total, terminated, truncated, info
 
     def reset(self, **kwargs):
@@ -196,7 +209,8 @@ class SafeRewardWrapper(gym.Wrapper):
         self._acc["sum_r_total"] += components["r_total"]
         self._acc["n_force_violations"] += int(components["force_violation"])
         self._acc["n_steps"] += 1
-
+        
+       
     def _episode_safe_accumulators(self) -> Dict[str, float]:
         n = max(self._acc["n_steps"], 1)
         return {

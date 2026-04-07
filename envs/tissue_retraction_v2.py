@@ -116,6 +116,12 @@ class TissueRetractionV2(gym.Env):
 
         # Force readout state
         self._last_force_magnitude = 0.0
+        # Episode step counter and limit
+        # WHY 500: baseline solves in ~247 steps. 500 gives PPO 2x
+        # the baseline time to explore before forced reset.
+        # Without this limit, random policy never terminates — no learning.
+        self._episode_steps = 0
+        self._max_episode_steps = 500
 
     # ------------------------------------------------------------------ #
     #  Gymnasium API — reset                                               #
@@ -134,6 +140,7 @@ class TissueRetractionV2(gym.Env):
         # Old API: returns obs only
         obs = self._env.reset()
         self._last_force_magnitude = 0.0
+        self._episode_steps = 0
 
         info = {
             "force_magnitude": 0.0,
@@ -164,9 +171,11 @@ class TissueRetractionV2(gym.Env):
         force_magnitude = self._read_sofa_force()
         info["force_magnitude"] = force_magnitude
         self._last_force_magnitude = force_magnitude
-
+        
+        # Replace with Episode step count and limit 
+        self._episode_steps += 1
         terminated = bool(done)
-        truncated = False
+        truncated = self._episode_steps >= self._max_episode_steps
 
         return obs, reward, terminated, truncated, info
 
