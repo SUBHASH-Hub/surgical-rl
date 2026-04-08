@@ -96,6 +96,10 @@ class TissueRetractionV2(gym.Env):
     Adds force readout from SOFA scene graph.
     Intended to be wrapped further by SafeRewardWrapper.
     """
+    # Workspace dimensions for normalising goal position to [-1, 1]
+    # Matches create_scene_kwargs in DEFAULT_ENV_KWARGS
+    # workspace_width=0.075, workspace_height=0.090, workspace_depth=0.090
+    _WS_HALF = np.array([0.0375, 0.045, 0.045], dtype=np.float32)
 
     metadata = {"render_modes": ["human", "headless"]}
 
@@ -108,11 +112,26 @@ class TissueRetractionV2(gym.Env):
 
         # Instantiate the underlying LapGym env
         self._env = _LapGymEnv(**kwargs)
-
-        # Mirror observation and action spaces exactly
-        # Confirmed from inspection: Box(-1,1,(3,),float32) and Box(-3,3,(3,),float32)
-        self.observation_space = self._env.observation_space
+        
+        
+        # Action space unchanged
         self.action_space = self._env.action_space
+
+        # 7D observation: [tool_xyz(3), goal_xyz(3), phase(1)]
+        # WHY 7D: Phase 2A proved agent cannot learn task without seeing
+        # goal position. Tool position alone gives no directional signal.
+        # Goal position allows agent to compute distance and direction.
+        # Phase flag tells agent which target to aim for.
+        self.observation_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(7,),
+            dtype=np.float32,
+        )
+
+        # Cache goal position — updated each reset
+        self._current_goal_norm = np.zeros(3, dtype=np.float32)
+        self._current_phase = 0
 
         # Force readout state
         self._last_force_magnitude = 0.0
@@ -134,20 +153,39 @@ class TissueRetractionV2(gym.Env):
     ) -> Tuple[np.ndarray, Dict]:
         """
         Converts LapGym reset() → gymnasium reset() returning (obs, info).
+        Returns 7D observation: [tool_xyz, goal_xyz_normalised, phase]
+        Goal position is _grasping_position normalised to [-1,1] using
+        workspace half-dimensions confirmed from inspection.
         """
         super().reset(seed=seed)
 
         # Old API: returns obs only
-        obs = self._env.reset()
+        obs_3d = self._env.reset()
         self._last_force_magnitude = 0.0
         self._episode_steps = 0
+
+        # Get and normalise grasping position (Phase 0 target)
+        grasping_raw = np.array(
+            self._env._grasping_position, dtype=np.float32
+        )
+        self._current_goal_norm = np.clip(
+            grasping_raw / self._WS_HALF, -1.0, 1.0
+        )
+        self._current_phase = 0.0
+
+        obs_7d = np.concatenate([
+            obs_3d.astype(np.float32),
+            self._current_goal_norm,
+            [self._current_phase],
+        ]).astype(np.float32)
 
         info = {
             "force_magnitude": 0.0,
             "phase": 0,
+            "goal_norm": self._current_goal_norm.copy(),
         }
 
-        return obs, info
+        return obs_7d, info
 
     # ------------------------------------------------------------------ #
     #  Gymnasium API — step                                                #
@@ -164,8 +202,11 @@ class TissueRetractionV2(gym.Env):
 
         LapGym's 'done' maps to 'terminated' (goal reached or collision limit).
         'truncated' is always False — LapGym handles episode length internally.
+        
+        Returns 7D observation.
+        Updates goal target when phase switches from GRASPING to RETRACTING.
         """
-        obs, reward, done, info = self._env.step(action)
+        obs_3d, reward, done, info = self._env.step(action)
 
         # Read force from SOFA scene graph
         force_magnitude = self._read_sofa_force()
@@ -177,7 +218,29 @@ class TissueRetractionV2(gym.Env):
         terminated = bool(done)
         truncated = self._episode_steps >= self._max_episode_steps
 
-        return obs, reward, terminated, truncated, info
+        # Update goal when phase switches
+        # Phase 0 = GRASPING → target is _grasping_position
+        # Phase 1 = RETRACTING → target is _end_position
+        current_phase = int(info.get("phase", 0))
+        if current_phase != int(self._current_phase):
+            if current_phase == 1:
+                end_raw = np.array(
+                    self._env._end_position, dtype=np.float32
+                )
+                self._current_goal_norm = np.clip(
+                    end_raw / self._WS_HALF, -1.0, 1.0
+                )
+            self._current_phase = float(current_phase)
+
+        obs_7d = np.concatenate([
+            obs_3d.astype(np.float32),
+            self._current_goal_norm,
+            [self._current_phase],
+        ]).astype(np.float32)
+
+        info["goal_norm"] = self._current_goal_norm.copy()
+
+        return obs_7d, reward, terminated, truncated, info
 
     # ------------------------------------------------------------------ #
     #  SOFA scene graph force readout                                      #
