@@ -28,3 +28,22 @@ All 3 runs: Goal reached = True, Mean FPS = 15-17
 - Collision steps: below 20 (currently 49 mean)
 - Total reward: above -100 (currently -165.54 mean)
 - Force constraint violations: below 5% (new metric, not in baseline)
+
+---
+
+## Phase 2A Results (07 April 2026)
+
+Training: 501,760 steps, 8h 27min, GTX 1650 CUDA
+
+| Metric | Phase 1 Baseline | Phase 2A PPO | Phase 2 Target |
+|--------|-----------------|--------------|----------------|
+| Mean episode steps | 247 | 500 (truncated) | < 200 |
+| Mean total reward | -165.54 | -359 | > -100 |
+| Collision steps | 49 | ~500 | < 20 |
+| Force violations | not measured | 0%* | < 5% |
+| Goal reached | True (scripted) | False | True |
+| Value function EV | — | 0.9999 | — |
+
+*Force hook returning 0.0 fallback — to be wired in Phase 2B
+
+Phase 2B fix: enrich observation from 3D to 7D (add goal position + phase flag)

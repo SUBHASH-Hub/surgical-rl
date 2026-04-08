@@ -26,7 +26,7 @@ SOFA inner loop (physics) → ROS 2 middleware → RL policy + FSM planner
 - Phase 1: Simulation Foundation + ROS2 Infrastructure (current)
 - Phase 2: RL Core — Safe Force-Bounded Retraction
 - Phase 3: Perception — Endoscopic Vision Integration
-- Phase 4: ROS2 Task Orchestration + FSM Planner
+- Phase 4: ROS2 Task Orchestration + BT Planner
 - Phase 5: Evaluation, Safety Analysis, Portfolio
 
 ## Platform
