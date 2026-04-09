@@ -101,7 +101,7 @@ class CurriculumCallback(BaseCallback):
                     wandb.log({
                         "curriculum/phase": phase,
                         "curriculum/lambda_collision": lambda_c,
-                        "curriculum/step": self.step_count,
+                        "curriculum/step": self.num_timesteps,
                     })
 
         return True  # True = continue training
@@ -305,8 +305,8 @@ def train(args):
     model = build_model(ppo_cfg, env, run_name)
 
     print(f"\nPolicy architecture:")
-    print(f"  Actor:  3 → 256 → 256 → 3  (ReLU)")
-    print(f"  Critic: 3 → 256 → 256 → 1  (ReLU)")
+    print(f"  Actor:  7 → 256 → 256 → 3  (ReLU)")
+    print(f"  Critic: 7 → 256 → 256 → 1  (ReLU)")
     print(f"  Total parameters: "
           f"{sum(p.numel() for p in model.policy.parameters()):,}")
 
@@ -333,7 +333,7 @@ def train(args):
     safe_env = env.env
     curriculum_cb = CurriculumCallback(
         curriculum_cfg=exp_cfg["curriculum"]["phases"],
-        env=safe_env,
+        safe_env=safe_env,
         verbose=1,
     )
 
