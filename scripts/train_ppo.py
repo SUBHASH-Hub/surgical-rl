@@ -62,54 +62,46 @@ from envs.safe_reward import SafeRewardWrapper
 
 class CurriculumCallback(BaseCallback):
     """
-    Advances curriculum phases based on episode count.
+    Step-based curriculum learning callback.
 
-    WHY a callback and not inside the env:
-      The curriculum schedule is a training decision, not an env decision.
-      The env applies the penalty; the callback decides when to tighten it.
-      This separation means you can change the curriculum without
-      touching the reward wrapper code.
+    Phase 2B used episode-count triggers — unreliable because episode
+    length changes as agent improves (500 steps early, 186 steps late).
+    Phase 2C uses step-count triggers — deterministic regardless of
+    episode length.
 
-    HOW it works:
-      After each episode, checks if episode count has crossed a phase
-      threshold. If yes, calls env.set_curriculum_phase() to update
-      lambda_collision in the SafeRewardWrapper.
+    Trigger steps from configs/phase2_baseline.yaml:
+      Phase 0: step 0       lambda_collision=0.1
+      Phase 1: step 150,000 lambda_collision=0.3
+      Phase 2: step 300,000 lambda_collision=0.8
     """
 
-    def __init__(self, curriculum_cfg: list, env: SafeRewardWrapper, verbose=0):
+    def __init__(self, curriculum_phases: list, safe_env, verbose=0):
         super().__init__(verbose)
-        self.curriculum_cfg = curriculum_cfg
-        self.env = env
-        self.current_phase = 0
-        self.episode_count = 0
+        self.curriculum_phases = sorted(
+            curriculum_phases, key=lambda x: x.get('trigger_step', 0)
+        )
+        self.safe_env = safe_env
+        self.current_phase_idx = 0
 
     def _on_step(self) -> bool:
-        # Check if any episode finished this step
-        dones = self.locals.get("dones", [])
-        self.episode_count += sum(dones)
+        current_step = self.num_timesteps
 
-        # Check if we should advance to next phase
-        for phase_cfg in self.curriculum_cfg:
-            phase = phase_cfg["phase"]
-            trigger = phase_cfg["trigger_episodes"]
-            lambda_c = phase_cfg["lambda_collision"]
-
-            if (self.episode_count >= trigger and
-                    phase > self.current_phase):
-                self.env.set_curriculum_phase(phase, lambda_c)
-                self.current_phase = phase
-
-                if self.verbose:
-                    print(f"\n[Curriculum] Advanced to Phase {phase} "
-                          f"at episode {self.episode_count} "
-                          f"(λ_collision={lambda_c})")
+        for i, phase in enumerate(self.curriculum_phases):
+            trigger = phase.get('trigger_step', 0)
+            if current_step >= trigger and i > self.current_phase_idx:
+                lambda_c = phase['lambda_collision']
+                self.safe_env.set_curriculum_phase(i, lambda_c)
+                self.current_phase_idx = i
+                print(f"\n[Curriculum] Advanced to Phase {i} "
+                      f"at step {current_step:,} "
+                      f"(λ_collision={lambda_c})")
 
                 # Log phase transition to W&B
                 if wandb.run is not None:
                     wandb.log({
                         "curriculum/phase": phase,
                         "curriculum/lambda_collision": lambda_c,
-                        "curriculum/episode": self.episode_count,
+                        "curriculum/step": self.step_count,
                     })
 
         return True  # True = continue training

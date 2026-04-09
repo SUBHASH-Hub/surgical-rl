@@ -133,12 +133,11 @@ class TissueRetractionV2(gym.Env):
 
         # Force readout state
         self._last_force_magnitude = 0.0
-        # Episode step counter and limit
-        # WHY 500: baseline solves in ~247 steps. 500 gives PPO 2x
-        # the baseline time to explore before forced reset.
-        # Without this limit, random policy never terminates — no learning.
+        # Phase 2C: reduced from 500 to 300
+        # Phase 2B showed agent solves in 115-240 steps.
+        # 300 gives headroom while forcing tighter efficiency.
         self._episode_steps = 0
-        self._max_episode_steps = 500
+        self._max_episode_steps = 300
 
     # ------------------------------------------------------------------ #
     #  Gymnasium API — reset                                               #
@@ -246,41 +245,53 @@ class TissueRetractionV2(gym.Env):
 
     def _read_sofa_force(self) -> float:
         """
-        Force proxy via tissue intrusion cost.
+        Read retraction force from RestShapeSpringsForceField.
 
-        FINDING (08-09 April 2026):
-        LapGym uses geometric collision detection, not SOFA contact
-        forces. Direct force readout from MechanicalObject.force
-        returns zero because constraint forces are stored internally
-        by the BlockGaussSeidelConstraintSolver.
+        During grasping/retraction phase, the instrument is connected
+        to the tissue via a spring force field. The spring force directly
+        encodes the pulling force on the tissue — this IS the clinical
+        force we want to measure.
 
-        The collision_cost field goes negative ONLY when the end-effector
-        position is simultaneously inside the tissue bounding box on all
-        three axes — which rarely occurs in normal approach trajectories
-        (agent approaches from above, Y stays outside tissue Y range).
+        Access path (confirmed from end_effector.py source):
+        lapgym.end_effector.grasping_force_field
+            → RestShapeSpringsForceField object
+            → .stiffness: active when has_actual_grasp=True
+            → force readout via SOFA data field
 
-        ACCEPTED PROXY:
-        force_magnitude returns 0.0 during training.
-        The SafeRewardWrapper's r_collision term provides equivalent
-        safety enforcement through curriculum-scaled geometric penalty.
-        Tissue intrusion distance (CONTACTDISTANCE mode) correlates
-        with contact force via Young's modulus = 27040 Pa.
+        Only returns non-zero during active grasping phase
+        (has_actual_grasp=True and stiffness > 0).
 
-        FUTURE WORK:
-        Access BlockGaussSeidelConstraintSolver lambda values directly,
-        or instrument the tissue FEM node for internal stress readout.
+        Falls back to 0.0 if not grasping or readout fails.
         """
         try:
-            reward_info = self._env.reward_info
-            collision_cost = reward_info.get("collision_cost", 0.0)
-            if collision_cost is not None and float(collision_cost) < 0.0:
-                scaling = float(self._env._reward_scaling_factor)
-                return abs(float(collision_cost)) / scaling
+            ee = self._env.end_effector
+
+            # Only measure force during active grasp
+            if not ee.has_actual_grasp:
+                return 0.0
+
+            ff = ee.grasping_force_field
+
+            # Check spring is active (stiffness > 0)
+            stiffness = ff.stiffness.array()
+            if stiffness is None or float(stiffness[0]) == 0.0:
+                return 0.0
+
+            # Try to read force data from the force field
+            # RestShapeSpringsForceField stores force in attached node
+            grasping_node = ee.grasping_node
+            for obj in grasping_node.objects:
+                try:
+                    force_arr = obj.force.array()
+                    if force_arr is not None and force_arr.size >= 3:
+                        return float(np.linalg.norm(force_arr[0, :3]))
+                except Exception:
+                    continue
+
         except Exception:
             pass
-        
+
         return 0.0
-    
 
     # ------------------------------------------------------------------ #
     #  Render and close                                                    #

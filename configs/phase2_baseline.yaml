@@ -27,17 +27,19 @@ environment:
 # Phase 0: explore freely, low collision cost
 # Phase 1: moderate collision awareness
 # Phase 2: strict safety enforcement
+# The old version used episode counts. 
+# The new version uses step counts — deterministic regardless of episode length.
 curriculum:
   phases:
     - phase: 0
       lambda_collision: 0.1
-      trigger_episodes: 0        # start here
+      trigger_step: 0        # start here
     - phase: 1
       lambda_collision: 0.3
-      trigger_episodes: 500      # advance after 500 episodes
+      trigger_step: 150000      # advance after 150000 steps
     - phase: 2
       lambda_collision: 0.8
-      trigger_episodes: 1000     # advance after 1000 episodes
+      trigger_step: 300000     # advance after 300000 steps
 
 # Evaluation settings
 evaluation:
