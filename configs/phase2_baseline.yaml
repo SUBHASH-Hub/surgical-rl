@@ -38,8 +38,8 @@ curriculum:
       lambda_collision: 0.3
       trigger_step: 150000      # advance after 150000 steps
     - phase: 2
-      lambda_collision: 0.8
-      trigger_step: 300000     # advance after 300000 steps
+      lambda_collision: 0.5    # was 0.8 for phase2d we change to 0.5 
+      trigger_step: 350000     # advance after 350000 steps it was 300000
 
 # Evaluation settings
 evaluation:

@@ -184,13 +184,13 @@ policy_kwargs:
 #   is the safer default.
 
 # --- Total training timesteps ---
-total_timesteps: 500000
-# WHY 500k:
+total_timesteps: 750000
+# WHY 500k to 750k for phase2d for more time to converge:
 #   Your baseline solves the task in ~247 steps.
 #   500k steps = ~2000 episodes for PPO to learn from.
 #   On GTX 1650 at ~2-5 FPS SOFA simulation, this is
 #   approximately 28-70 hours of wall-clock training.
-#
+#   And in Phase2D we conver this 500k to 750k 
 #   This is Phase 2 target. We will checkpoint every 50k steps
 #   so you can evaluate progress without waiting for completion.
 #   If the agent beats baseline by 100k steps, we stop early.
