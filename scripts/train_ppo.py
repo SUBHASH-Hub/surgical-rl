@@ -332,7 +332,7 @@ def train(args):
     # Unwrap Monitor to get SafeRewardWrapper
     safe_env = env.env
     curriculum_cb = CurriculumCallback(
-        curriculum_cfg=exp_cfg["curriculum"]["phases"],
+        curriculum_phases=exp_cfg["curriculum"]["phases"],
         safe_env=safe_env,
         verbose=1,
     )
