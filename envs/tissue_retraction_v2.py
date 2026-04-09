@@ -14,16 +14,14 @@ WHY THIS FILE EXISTS:
   It also adds SOFA scene graph force readout (the info dict has
   no force data — confirmed by observation space inspection).
 
-OBSERVATION SPACE (confirmed):
-  Box(-1.0, 1.0, shape=(3,), float32)
-  Dimensions: [normalised_x, normalised_y, normalised_z]
-  These are end-effector positions in workspace frame, pre-normalised
-  by LapGym. No additional normalisation needed for PPO.
-
-ACTION SPACE (confirmed):
-  Box(-3.0, 3.0, shape=(3,), float32)
-  Dimensions: [vx, vy, vz] in mm/s
-  Bounded by maximum_robot_velocity=3.0
+OBSERVATION SPACE (Phase 2B, confirmed):
+  Box(-1.0, 1.0, shape=(7,), float32)
+  Dimensions: [tool_x, tool_y, tool_z,
+               goal_x, goal_y, goal_z,
+               phase_flag]
+  tool_xyz: end-effector position, normalised by workspace half-dims
+  goal_xyz: grasping or end position, normalised by _WS_HALF
+  phase_flag: 0.0=GRASPING, 1.0=RETRACTING
 
 FORCE READOUT:
   LapGym does not expose force in the info dict.
@@ -248,46 +246,41 @@ class TissueRetractionV2(gym.Env):
 
     def _read_sofa_force(self) -> float:
         """
-        Read end-effector contact force magnitude from SOFA scene graph.
+        Force proxy via tissue intrusion cost.
 
-        WHY scene graph and not info dict:
-          LapGym does not expose force in the info dict (confirmed by
-          observation space inspection). SOFA stores all mechanical
-          state in the scene graph tree. We access the end-effector
-          node directly via the Python binding.
+        FINDING (08-09 April 2026):
+        LapGym uses geometric collision detection, not SOFA contact
+        forces. Direct force readout from MechanicalObject.force
+        returns zero because constraint forces are stored internally
+        by the BlockGaussSeidelConstraintSolver.
 
-        SOFA scene graph path (from scene_graph_analysis.md):
-          Root → Simulation → EndEffector → MechanicalObject
-          The force field is stored in the 'force' data field as
-          a (N, 3) array where N = number of DOFs.
+        The collision_cost field goes negative ONLY when the end-effector
+        position is simultaneously inside the tissue bounding box on all
+        three axes — which rarely occurs in normal approach trajectories
+        (agent approaches from above, Y stays outside tissue Y range).
 
-        Falls back to 0.0 safely if:
-          - Scene graph not yet initialised
-          - Node path has changed between LapGym versions
-          - Force field is empty
+        ACCEPTED PROXY:
+        force_magnitude returns 0.0 during training.
+        The SafeRewardWrapper's r_collision term provides equivalent
+        safety enforcement through curriculum-scaled geometric penalty.
+        Tissue intrusion distance (CONTACTDISTANCE mode) correlates
+        with contact force via Young's modulus = 27040 Pa.
+
+        FUTURE WORK:
+        Access BlockGaussSeidelConstraintSolver lambda values directly,
+        or instrument the tissue FEM node for internal stress readout.
         """
         try:
-            # Access SOFA root node via SofaPython3 binding
-            root = self._env.root_node
-
-            # Navigate to end-effector mechanical object
-            # Path confirmed from Phase 1 scene graph analysis
-            ee_node = root["Simulation"]["EndEffector"]
-            mech_obj = ee_node["MechanicalObject"]
-
-            # Read force field — shape (N, 3) in SOFA units
-            forces = mech_obj.force.array()
-
-            if forces is not None and forces.size > 0:
-                # Sum all DOF forces, take magnitude
-                total_force = np.sum(forces, axis=0)
-                return float(np.linalg.norm(total_force))
-
+            reward_info = self._env.reward_info
+            collision_cost = reward_info.get("collision_cost", 0.0)
+            if collision_cost is not None and float(collision_cost) < 0.0:
+                scaling = float(self._env._reward_scaling_factor)
+                return abs(float(collision_cost)) / scaling
         except Exception:
-            # Silent fallback — never crash training due to force readout
             pass
-
+        
         return 0.0
+    
 
     # ------------------------------------------------------------------ #
     #  Render and close                                                    #
