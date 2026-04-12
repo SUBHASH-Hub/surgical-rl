@@ -1,0 +1,12 @@
+Phase 3A — Instrument Tip Detector — Test Set Metrics
+======================================================
+Dataset:         7284 frames, 50 episodes
+Backbone:        MobileNetV3-small
+Training epochs: 30 (10 frozen + 20 fine-tune)
+Best val loss:   0.00621 (MSE)
+
+Test MAE (total): 0.0214 normalised units
+Test MAE X:       0.0156
+Test MAE Y:       0.0250
+Test MAE Z:       0.0235
+Pixel error:      5.1 px  (on 480x480 image)

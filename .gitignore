@@ -208,3 +208,10 @@ __marimo__/
 logs/
 *.comp
 wandb/
+
+# ── Surgical RL — ML data and model weights ───────────────────────────────
+# Data: 7284 PNG frames (~1.4GB) — reproduced by collect_rgb_frames.py
+data/
+# Model weights: large binary files — reproduced by training scripts
+# Result files (.json/.txt/.csv) are small and ARE committed
+*.pth
