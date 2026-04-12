@@ -1,0 +1,9 @@
+Phase 3A — Tissue Segmentation — Test Set Metrics
+==================================================
+Architecture:  UNet + MobileNetV3-Small encoder
+Parameters:    1,729,217 (<5M: yes)
+Training:      30 epochs, lr=0.0001, batch=16
+Best val IoU:  1.0000
+
+Test IoU:      1.0000
+Test Dice:     1.0000
