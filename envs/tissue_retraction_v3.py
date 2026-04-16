@@ -191,6 +191,8 @@ class TissueRetractionV3(gym.Env):
         if rgb_frame is None:
             return np.zeros(self.OBS_DIM, dtype=np.float32)
 
+        # Store frame for external access (optical flow proxy)
+        self._last_rgb_frame = rgb_frame.copy()  # copy — prevents same-object aliasing in optical flow
         # Run through perception pipeline → 132D observation
         obs_132d = self.perception.get_observation(rgb_frame, phase_flag)
         return obs_132d

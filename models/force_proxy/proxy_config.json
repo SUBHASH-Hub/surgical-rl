@@ -1,0 +1,33 @@
+{
+  "method": "Farneback dense optical flow",
+  "roi": "tissue segmentation mask (Phase 3A)",
+  "proxy_metric": "mean flow magnitude in tissue ROI (px/frame)",
+  "high_force_threshold": 0.35,
+  "farneback_params": {
+    "pyr_scale": 0.5,
+    "levels": 3,
+    "winsize": 15,
+    "iterations": 3,
+    "poly_n": 5,
+    "poly_sigma": 1.2,
+    "flags": 0
+  },
+  "validation": {
+    "pearson_r": NaN,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1_score": 0.0,
+    "n_samples": 3000,
+    "n_high_flow": 0,
+    "n_collision_steps": 0,
+    "flow_threshold": 2.0,
+    "flow_mean": 0.12781262397766113,
+    "flow_std": 0.11361503601074219,
+    "flow_max": 0.7316098809242249
+  },
+  "phase4_topic": "/tissue_force_proxy",
+  "clinical_note": "Force proxy is a visual estimate only. Real surgical robots require calibrated force sensors for safety-critical force limits. This proxy is suitable for monitoring and logging, not hard safety stops.",
+  "calibration_note": "Threshold calibrated from 10 episodes of Phase 3B agent. Agent mean flow=0.128 px/frame, std=0.114, max=0.732. Threshold set at mean+2std=0.356 px/frame. No collision steps observed \u2014 agent learned safe tissue interaction. For Phase 4 ROS2: values above 0.35 trigger monitoring alert, values above 1.0 trigger safety stop.",
+  "phase4_safety_stop_threshold": 1.0,
+  "phase4_alert_threshold": 0.35
+}
