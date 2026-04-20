@@ -35,12 +35,11 @@ from builtin_interfaces.msg import Time
 SOFA_AVAILABLE = False
 try:
     from stable_baselines3 import PPO
-    import sofagym  # must actually import sofagym to confirm SOFA is present
+    from envs.tissue_retraction_v2 import TissueRetractionV2
     SOFA_AVAILABLE = True
 except ImportError as e:
     print(f"[bridge_node] WARNING: SOFA imports unavailable: {e}")
     print("[bridge_node] Running in stub mode -- topics will publish zeros")
-
 
 class SofaBridgeNode(Node):
     """ROS 2 node that drives the SOFA simulation and relays state to topics."""
@@ -87,18 +86,29 @@ class SofaBridgeNode(Node):
 
     def _init_env(self):
         import importlib
+        from sofa_env.scenes.tissue_retraction.tissue_retraction_env import RenderMode
+
         self.declare_parameter('env_class',
-                               'sofagym.envs.TissueRetractionV3')
+                'envs.tissue_retraction_v2.TissueRetractionV2')
+        self.declare_parameter('render_mode', 'headless')
+
         env_class_path = self.get_parameter('env_class').value
+        render_mode_str = self.get_parameter('render_mode').value
+
+        # Convert string to RenderMode enum
+        render_mode = RenderMode.HUMAN if render_mode_str == 'human' else RenderMode.HEADLESS
+
         module_path, class_name = env_class_path.rsplit('.', 1)
         mod = importlib.import_module(module_path)
         EnvClass = getattr(mod, class_name)
-        self.get_logger().info(f'Creating env: {env_class_path}')
-        self._env = EnvClass()
+
+        self.get_logger().info(
+            f'Creating env: {env_class_path} render_mode={render_mode}')
+        self._env = EnvClass(env_kwargs={"render_mode": render_mode})
         obs, _ = self._env.reset()
         self._obs = obs
         self.get_logger().info('SOFA env reset -- bridge ready')
-
+    
     # -- Callbacks ------------------------------------------------------------
 
     def _cb_joint_target(self, msg: Vector3):
@@ -129,7 +139,7 @@ class SofaBridgeNode(Node):
         self._step_count += 1
 
         tool_xyz = obs[:3].tolist()
-        phase = float(obs[3]) if len(obs) > 3 else 0.0
+        phase = float(obs[6]) if len(obs) > 6 else 0.0
 
         # /joint_states
         js = JointState()
@@ -155,12 +165,16 @@ class SofaBridgeNode(Node):
         if rgb is not None:
             self._pub_image.publish(self._rgb_to_image_msg(rgb, now))
 
-        if terminated or truncated:
+        if terminated:
             self.get_logger().info(
-                f'Episode ended at step {self._step_count} -- resetting')
+                f'Task terminated at step {self._step_count} -- resetting')
             obs, _ = self._env.reset()
             self._obs = obs
             self._step_count = 0
+        elif truncated:
+            self.get_logger().info(
+                f'Step limit reached at {self._step_count} -- continuing teleop')
+            self._step_count = 0  # reset counter only, environment keeps running
 
     def _step_stub(self, now: Time):
         js = JointState()

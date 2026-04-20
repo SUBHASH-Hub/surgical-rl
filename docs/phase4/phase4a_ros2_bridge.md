@@ -161,6 +161,109 @@ Phase 4A verified working on:
 - Emergency stop via Esc verified ✓
 - Stub mode verified ✓
 
+## Update: TissueRetractionV2 (Phase 4A Final)
+
+Phase 4A bridge was updated from TissueRetractionV3 to TissueRetractionV2
+after analysis confirmed V2 is the correct environment for the deployment
+layer. V3 is the research environment (Phase 3) and adds unnecessary
+perception overhead to the bridge.
+
+### Environment change rationale
+
+| Aspect | TissueRetractionV2 | TissueRetractionV3 |
+|---|---|---|
+| Observation | 7D ground-truth | 132D visual |
+| Perception pipeline | None | MobileNetV3 inference |
+| Bridge overhead | Minimal | High |
+| Phase index | obs[6] | obs[3] |
+| Purpose | Deployment layer | Research layer |
+
+### Observation mapping (V2, 7D)
+obs[0:3] → tool_xyz (normalised to [-1, 1])
+obs[3:6] → goal_xyz (normalised to [-1, 1])
+obs[6]   → phase (0.0=GRASPING, 1.0=RETRACTING)
+
+### Grasping mechanics
+
+Grasping in TissueRetractionV2 is **automatic** — no button press required.
+When the instrument tip reaches within 3mm (`grasping_threshold=0.003`) of
+the grasping position, the environment automatically triggers the grasp.
+
+The grasping position is randomised each episode. Example values:
+Grasping position (world): [-0.0486, 0.0085, 0.0356] metres
+Tool start position (obs):  [-0.181,  0.379, -0.802]  normalised
+Goal normalised (obs):      [-1.0,    0.189,  0.791]  normalised
+
+The red marker visible in the SOFA GUI is the grasping target. Navigate
+the instrument tip to within 3mm of that marker to trigger automatic grasp.
+
+### Teleop reset behaviour (updated)
+
+| Event | Behaviour |
+|---|---|
+| `terminated=True` (goal reached or collision) | Environment resets |
+| `truncated=True` (300 step limit) | Counter resets only, surgeon continues |
+
+This allows continuous teleoperation without interruption at 300 steps,
+matching real surgical operation where the surgeon operates until task
+completion.
+
+### Compatibility fixes applied
+
+These fixes were required to run the bridge with full SOFA stack:
+
+| Issue | Fix |
+|---|---|
+| `No module named 'gymnasium'` | PYTHONPATH set in activate.sh |
+| `No module named 'sofagym'` | Corrected to envs.tissue_retraction_v2 |
+| `No module named 'sofa_env'` | lap_gym/sofa_env added to PYTHONPATH |
+| `No module named 'Sofa'` | sofa_install SofaPython3 path added to PYTHONPATH |
+| `coverage.types` AttributeError | numba coverage_support.py patched |
+| `setuptools --editable` error | Downgraded setuptools to 65.5.1 |
+| Model path not found | Run bridge from surgical-rl directory |
+| `render_mode` string vs enum | Convert string to RenderMode enum in _init_env |
+
+### Position HUD (Phase 4A Option A — planned)
+
+A live position HUD will be added to the teleop terminal showing:
+- Current tool XYZ position
+- Goal XYZ position  
+- Distance to goal
+- Recommended movement direction
+
+This is implemented via a `/guidance` ROS 2 topic subscriber in the
+teleop node, giving the surgeon real-time navigation feedback without
+requiring the PPO agent (which is Phase 4B).
+
+## Running Phase 4A with SOFA GUI
+
+```bash
+# Terminal 1 — bridge with GUI (must run from surgical-rl directory)
+source ~/surgical_robot_lapgym_ws/activate.sh
+cd ~/surgical_robot_lapgym_ws/surgical-rl
+ros2 run lapgym_ros2_bridge bridge_node --ros-args -p render_mode:=human
+
+# Terminal 2 — keyboard teleop
+source ~/surgical_robot_lapgym_ws/activate.sh
+ros2 run lapgym_ros2_bridge teleop_keyboard
+
+# Terminal 3 — monitor topics
+source ~/surgical_robot_lapgym_ws/activate.sh
+ros2 topic echo /joint_states
+```
+
+## Verified behaviour
+
+- SOFA GUI opens showing FEM tissue and rigid instrument ✓
+- Keyboard controls instrument continuously without 300-step reset ✓
+- Grasping triggers automatically when tip reaches within 3mm of red marker ✓
+- `/joint_states` publishes at 50 Hz with correct 7D V2 observation ✓
+- `/tissue_force_proxy` shows force reading during tissue interaction ✓
+- Emergency stop via Esc key functional ✓
+
+
 ## Next Phase
 
 Phase 4B: PPO policy action servers — wrapping the Phase 2C checkpoint as a ROS 2 action server with `is_preempted()` checking every step.
+
+
