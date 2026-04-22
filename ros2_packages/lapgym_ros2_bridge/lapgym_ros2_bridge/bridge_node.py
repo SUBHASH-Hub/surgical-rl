@@ -56,7 +56,7 @@ class SofaBridgeNode(Node):
         self._pub_joint = self.create_publisher(JointState, '/joint_states', 10)
         self._pub_force = self.create_publisher(Float32, '/tissue_force_proxy', 10)
         self._pub_image = self.create_publisher(Image, '/camera/image_raw', 10)
-
+        self._pub_guidance = self.create_publisher(JointState, '/guidance', 10)
         # -- Subscribers ------------------------------------------------------
         self.create_subscription(
             Vector3, '/joint_target', self._cb_joint_target, 10)
@@ -135,6 +135,13 @@ class SofaBridgeNode(Node):
         self._pending_delta[:] = 0.0
 
         obs, reward, terminated, truncated, info = self._env.step(action)
+        # Get actual world position of instrument tip
+        try:
+            tool_world = np.array(
+                self._env._env.end_effector.gripper.motion_target_mechanical_object
+                .position.array()[0][:3], dtype=np.float32)
+        except Exception:
+            tool_world = np.zeros(3, dtype=np.float32)
         self._obs = obs
         self._step_count += 1
 
@@ -147,6 +154,27 @@ class SofaBridgeNode(Node):
         js.name = ['instrument_x', 'instrument_y', 'instrument_z', 'phase']
         js.position = tool_xyz + [phase]
         self._pub_joint.publish(js)
+
+        # /guidance -- world-space positions + real distance for HUD
+        # Switch goal to end_position during retracting phase
+        if phase == 1.0:
+            goal_world = np.array(self._env._env._end_position, dtype=np.float32)
+            dist_world = float(info.get('distance_to_end_position', 0.0) or 0.0)
+        else:
+            goal_world = np.array(self._env._env._grasping_position, dtype=np.float32)
+            dist_world = float(info.get('distance_to_grasping_position', 0.0) or 0.0)
+        in_collision = float(info.get('in_collision', False))
+        collision_cost = float(info.get('collision_cost', 0.0) or 0.0)
+        collision = abs(collision_cost) if in_collision else 0.0
+        gs = JointState()
+        gs.header.stamp = now
+        gs.name = ['goal_x', 'goal_y', 'goal_z', 'distance',
+                   'collision', 'steps_in_collision',
+                   'tool_wx', 'tool_wy', 'tool_wz']
+        gs.position = goal_world.tolist() + [dist_world, collision,
+                      float(info.get('steps_in_collision', 0))] + \
+                      tool_world.tolist()
+        self._pub_guidance.publish(gs)
 
         # /tissue_force_proxy
         force_val = self._compute_force_proxy(info)

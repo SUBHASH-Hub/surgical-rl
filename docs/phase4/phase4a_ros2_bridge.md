@@ -262,6 +262,109 @@ ros2 topic echo /joint_states
 - Emergency stop via Esc key functional ✓
 
 
+## Phase 4A HUD Guidance — Teleop Position Display
+
+### What is the HUD
+
+HUD (Heads-Up Display) is a real-time single-line status display in the
+teleop terminal showing instrument position, goal position, distance, and
+collision status. The surgeon sees all critical navigation information
+without looking away from the SOFA GUI.
+
+### What Was Built
+
+A world-space millimetre guidance system added to `teleop_keyboard.py`
+and `bridge_node.py` that gives the surgeon exact navigation feedback
+to reach the grasping target.
+
+**HUD format:**
+[GRASPING] G(-49,+9,+36mm) T(-46,+11,+33mm) D:5mm X:OK Y:OK Z:OK SAFE
+
+| Field | Meaning |
+|---|---|
+| `[GRASPING]` / `[RETRACTING]` | Current task phase |
+| `G(x,y,z mm)` | Goal position in world millimetres |
+| `T(x,y,z mm)` | Tool position in world millimetres |
+| `D:Nmm` | Distance to goal in world millimetres |
+| `X:±N(key)` | Millimetres to move on X axis and which key |
+| `Y:±N(key)` | Millimetres to move on Y axis and which key |
+| `Z:±N(key)` | Millimetres to move on Z axis and which key |
+| `SAFE` / `COL:N` | Collision status and cost |
+
+**Colour coding:**
+- Distance red `> 20mm` — navigating
+- Distance yellow `5–20mm` — approaching
+- Distance green `< 5mm` — grasp imminent (triggers at 3mm)
+- Axis yellow — needs correction
+- Axis green `OK` — within 3mm of goal on that axis
+- Collision red — instrument touching tissue incorrectly
+- Safe green — no collision
+
+### Surgeon Workflow
+
+1. Launch bridge with GUI and teleop nodes
+2. Read `G(x,y,z)` — goal position in world millimetres
+3. Read `T(x,y,z)` — current tool position
+4. Follow axis hints — press the indicated key for each axis
+5. When all axes show `OK` and distance turns green — grasp triggers automatically
+6. Goal `G` switches to retraction end position — follow new hints to retract tissue
+
+### Key Engineering Findings
+
+**Coordinate space mismatch** — `obs[0:3]` (tool position) and `obs[3:6]`
+(goal position) from the gymnasium observation are in different normalised
+coordinate spaces and cannot be compared directly by subtraction. This
+caused incorrect axis guidance in earlier iterations.
+
+**Correct distance metric** — `info['distance_to_grasping_position']` from
+the LapGym info dict provides the physically correct world-space distance
+in metres. This is what the environment itself uses to trigger grasping at
+the 3mm threshold.
+
+**Tool world position access** — the instrument tip position in world
+metres is accessed via the SOFA scene graph:
+```python
+env._env.end_effector.gripper.motion_target_mechanical_object
+    .position.array()[0][:3]
+```
+
+**Goal switching** — after grasping triggers, the guidance goal switches
+from `_grasping_position` to `_end_position` and distance switches from
+`distance_to_grasping_position` to `distance_to_end_position`.
+
+**Fixed goal positions (world metres):**
+Grasping target:   X=-0.0486  Y=+0.0085  Z=+0.0356  (= -49, +9, +36 mm)
+Retraction target: X=-0.0194  Y=+0.0626  Z=-0.0033  (= -19, +63, -3 mm)
+
+### ROS 2 Topic: /guidance
+
+Published by `bridge_node.py` at 50 Hz. Contains 9 values:
+
+| Index | Name | Units | Description |
+|---|---|---|---|
+| 0 | goal_x | metres | Goal X world position |
+| 1 | goal_y | metres | Goal Y world position |
+| 2 | goal_z | metres | Goal Z world position |
+| 3 | distance | metres | World-space distance to goal |
+| 4 | collision | — | Collision cost magnitude |
+| 5 | steps_in_collision | count | Steps in collision this episode |
+| 6 | tool_wx | metres | Tool X world position |
+| 7 | tool_wy | metres | Tool Y world position |
+| 8 | tool_wz | metres | Tool Z world position |
+
+### Verification
+
+Verified on Ubuntu 22.04, ROS 2 Humble, GTX 1650:
+- HUD stays on single line — no scrolling ✓
+- Tool position updates correctly as instrument moves ✓
+- Distance decreases correctly as instrument approaches goal ✓
+- All axes show OK when within 3mm of goal ✓
+- Grasp triggers automatically at 3mm ✓
+- Goal switches to retraction target after grasp ✓
+- Collision indicator turns red on tissue contact ✓
+- Phase changes GRASPING → RETRACTING in HUD ✓
+
+
 ## Next Phase
 
 Phase 4B: PPO policy action servers — wrapping the Phase 2C checkpoint as a ROS 2 action server with `is_preempted()` checking every step.
