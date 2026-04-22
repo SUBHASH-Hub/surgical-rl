@@ -352,6 +352,17 @@ Published by `bridge_node.py` at 50 Hz. Contains 9 values:
 | 7 | tool_wy | metres | Tool Y world position |
 | 8 | tool_wz | metres | Tool Z world position |
 
+## ROS 2 Graph
+
+The Phase 4A ROS 2 computation graph captured via `rqt_graph`:
+
+![Phase 4A ROS 2 Graph](images/phase4a_rosgraph.png)
+
+Note: `/tissue_force_proxy` and `/camera/image_raw` are published at 50 Hz
+but do not appear in the active graph because their subscribers
+(Phase 4D safety watchdog and Phase 4B vision pipeline) have not been
+built yet. Run `ros2 topic list` to confirm all 5 topics are live.
+
 ### Verification
 
 Verified on Ubuntu 22.04, ROS 2 Humble, GTX 1650:
