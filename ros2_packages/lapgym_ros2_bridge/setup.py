@@ -10,6 +10,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/action', ['action/Retract.action']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,6 +23,8 @@ setup(
         'console_scripts': [
             'bridge_node = lapgym_ros2_bridge.bridge_node:main',
             'teleop_keyboard = lapgym_ros2_bridge.teleop_keyboard:main',
+            'retract_policy_server = lapgym_ros2_bridge.retract_policy_server:main',
+            'policy_test_client = lapgym_ros2_bridge.policy_test_client:main',
         ],
     },
 )

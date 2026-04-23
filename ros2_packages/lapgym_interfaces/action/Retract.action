@@ -1,0 +1,16 @@
+# Goal -- sent by client to start the policy
+float32 max_steps        # maximum steps before declaring timeout (0 = use default 300)
+bool    render           # whether to render GUI during execution
+---
+# Result -- sent by server when done
+bool    success          # true if goal was reached
+int32   steps_taken      # how many steps the policy ran
+float32 final_distance   # world-space distance to goal at termination (metres)
+string  termination      # "goal_reached" | "preempted" | "timeout" | "collision"
+---
+# Feedback -- sent every step during execution
+float32 distance_to_goal # current world-space distance in metres
+float32 distance_mm      # same in millimetres for display
+int32   step             # current step count
+bool    in_collision     # whether instrument is in collision
+float32 collision_cost   # collision cost magnitude
