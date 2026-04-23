@@ -25,6 +25,8 @@ setup(
             'teleop_keyboard = lapgym_ros2_bridge.teleop_keyboard:main',
             'retract_policy_server = lapgym_ros2_bridge.retract_policy_server:main',
             'policy_test_client = lapgym_ros2_bridge.policy_test_client:main',
+            'approach_policy_server = lapgym_ros2_bridge.approach_policy_server:main',
+            'hold_policy_server = lapgym_ros2_bridge.hold_policy_server:main',
         ],
     },
 )

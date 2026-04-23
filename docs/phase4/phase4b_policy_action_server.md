@@ -176,10 +176,98 @@ ros2 node list            # shows /retract_policy_server /policy_test_client
 ros2 action info /retract_policy
 ```
 
-## Next Steps — Phase 4B remaining
+## ApproachPolicyServer
 
-- `ApproachPolicyServer` — navigates instrument to grasping zone
-- `HoldPolicyServer` — holds retracted position
+**Purpose:** Navigates instrument from random starting position to the
+grasping zone using a proportional controller. No PPO needed — approach
+is pure navigation toward a fixed target.
 
+**Algorithm:**
+error = GRASPING_TARGET - tool_world_position
+direction = error / |error|
+action = clip(direction * APPROACH_GAIN, -3.0, 3.0)
+
+**Parameters:**
+- Grasping target: `[-0.0486, 0.0085, 0.0356]` metres (world space)
+- Approach threshold: 15mm — hands off to RetractPolicyServer
+- Gain: 2.0 — scales normalised direction to action space
+- Default max steps: 200
+
+**Verified result:**
+Steps taken:     151
+Final distance:  14.7mm  (within 15mm threshold)
+Termination:     goal_reached
+Success:         True
+
+**Why proportional controller not PPO:** The approach phase is geometric
+navigation — move toward a fixed point in 3D space. A proportional
+controller is deterministic, interpretable, and guaranteed to converge.
+PPO would be overkill and would add unnecessary variance.
+
+## HoldPolicyServer
+
+**Purpose:** Holds instrument at its current position after retraction
+completes. Publishes zero-delta actions every step. Runs until cancelled
+by the Behaviour Tree or timeout.
+
+**Algorithm:**
+action = [0.0, 0.0, 0.0]   # zero delta every step
+env.step(action)             # simulation advances, instrument stays
+time.sleep(0.1)              # 10 Hz hold rate
+
+**Parameters:**
+- Default max steps: 500 (~55 seconds at 10Hz)
+- Feedback every 10 steps
+- `success: True` even on preemption — hold is always successful
+
+**Verified result:**
+Steps taken:  50
+Termination:  timeout
+Success:      True
+
+**Why 10Hz not 50Hz:** During hold the instrument is stationary.
+High frequency stepping wastes CPU. 10Hz is sufficient to maintain
+position and check preemption frequently enough for safety.
+
+## Phase 4B Complete — All Three Servers Verified
+
+| Server | Action | Controller | Steps | Result |
+|---|---|---|---|---|
+| `RetractPolicyServer` | `/retract_policy` | PPO (Phase 2D) | 175 | goal_reached |
+| `ApproachPolicyServer` | `/approach_policy` | Proportional | 151 | goal_reached |
+| `HoldPolicyServer` | `/hold_policy` | Zero-action | 50 | timeout |
+
+All three servers implement identical safety interface:
+- `GoalResponse.ACCEPT` / `GoalResponse.REJECT`
+- `CancelResponse.ACCEPT` — always allow preemption
+- `is_cancel_requested` checked as first operation every step
+- Maximum preemption latency: one simulation step (~20ms)
+
+## Running All Three Servers
+
+```bash
+# ApproachPolicyServer
+source ~/surgical_robot_lapgym_ws/activate.sh
+cd ~/surgical_robot_lapgym_ws/surgical-rl
+ros2 run lapgym_ros2_bridge approach_policy_server
+
+# Test approach
+ros2 action send_goal /approach_policy lapgym_interfaces/action/Retract \
+  "{max_steps: 200.0, render: false}"
+
+# HoldPolicyServer
+ros2 run lapgym_ros2_bridge hold_policy_server
+
+# Test hold
+ros2 action send_goal /hold_policy lapgym_interfaces/action/Retract \
+  "{max_steps: 50.0, render: false}"
+
+# Verify all three actions available
+ros2 action list
+# Expected:
+# /approach_policy
+# /hold_policy
+# /retract_policy
+```
 These complete the three-server Phase 4B architecture before Phase 4C
 Behaviour Tree orchestration.
