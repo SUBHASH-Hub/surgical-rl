@@ -29,8 +29,8 @@ from lapgym_interfaces.action import Retract
 
 # Fixed grasping target in world metres (confirmed from Phase 4A analysis)
 GRASPING_TARGET = np.array([-0.0485583, 0.0085, 0.0356076], dtype=np.float32)
-APPROACH_THRESHOLD = 0.015   # 15mm -- hand off to RetractPolicyServer
-DEFAULT_MAX_STEPS = 200
+APPROACH_THRESHOLD = 0.025   # 25mm -- hand off to RetractPolicyServer
+DEFAULT_MAX_STEPS = 400
 APPROACH_GAIN = 2.0          # proportional gain for velocity command
 
 

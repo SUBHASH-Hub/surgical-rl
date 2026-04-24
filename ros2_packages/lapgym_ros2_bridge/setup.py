@@ -27,6 +27,7 @@ setup(
             'policy_test_client = lapgym_ros2_bridge.policy_test_client:main',
             'approach_policy_server = lapgym_ros2_bridge.approach_policy_server:main',
             'hold_policy_server = lapgym_ros2_bridge.hold_policy_server:main',
+            'surgical_bt_node = lapgym_ros2_bridge.surgical_bt_node:main',
         ],
     },
 )
