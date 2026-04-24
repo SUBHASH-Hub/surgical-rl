@@ -71,11 +71,19 @@ def generate_launch_description():
             name='surgical_bt_node',
             output='screen')])
 
+    # -- Node 6: Safety watchdog (independent process) ------------------------
+    watchdog = Node(
+        package='lapgym_ros2_bridge',
+        executable='safety_watchdog_node',
+        name='safety_watchdog_node',
+        output='screen')
+
     return LaunchDescription([
         render_arg,
         bridge,
         approach,
         retract,
         hold,
+        watchdog,
         bt,
     ])

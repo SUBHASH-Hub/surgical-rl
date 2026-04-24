@@ -29,6 +29,7 @@ setup(
             'approach_policy_server = lapgym_ros2_bridge.approach_policy_server:main',
             'hold_policy_server = lapgym_ros2_bridge.hold_policy_server:main',
             'surgical_bt_node = lapgym_ros2_bridge.surgical_bt_node:main',
+            'safety_watchdog_node = lapgym_ros2_bridge.safety_watchdog_node:main',
         ],
     },
 )
