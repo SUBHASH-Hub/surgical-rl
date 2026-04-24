@@ -11,6 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/action', ['action/Retract.action']),
+        ('share/' + package_name + '/launch', ['launch/surgical_system.launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

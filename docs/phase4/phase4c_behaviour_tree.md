@@ -136,6 +136,31 @@ ros2 run lapgym_ros2_bridge surgical_bt_node
 
 Wait for all four servers to print `ready` before starting Terminal 5.
 
+## Launch file — one command start
+
+`launch/surgical_system.launch.py` starts all 5 nodes simultaneously:
+
+```bash
+ros2 launch lapgym_ros2_bridge surgical_system.launch.py
+```
+
+The BT node is delayed by 15 seconds via `TimerAction` to allow all four
+SOFA environments to initialise before the first tick.
+
+**Note on GUI:** The launch file includes `bridge_node` which opens the
+SOFA GUI when `render_mode:=human`. However the GUI shows the bridge's
+own environment which is idle — the actual surgical procedure runs inside
+the action servers' headless environments. The bridge is included for
+`/tissue_force_proxy` publishing which the ForceWatchdog monitors.
+
+**Verified launch result (headless):**
+```
+Approach: goal_reached steps=150 dist=24.5mm
+Retract:  goal_reached steps=150 dist=2.9mm
+Hold:     timeout      steps=200
+BT ROOT:  SUCCESS
+```
+
 ## Roadmap
 
 | Phase | Description | Status |
