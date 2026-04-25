@@ -120,7 +120,7 @@ for 3 consecutive readings (60ms)
 
 ---
 
-## IEC 62304 Emergency Stop Analysis — Senior Engineer Notes
+## IEC 62304 Emergency Stop Analysis — Engineer Notes
 
 ### Observed response sequence (from verified run)
 
@@ -174,3 +174,44 @@ printing the call stack on SIGINT. Not an error.
 | Bridge keeps running after BT SUCCESS | bridge_node has no stop condition | Expected — Ctrl+C to stop |
 | GUI shows idle environment | Action servers run headless | Expected — bridge GUI is for teleop only |
 | SOFA ERROR plugin not found | Plugin renamed in SOFA v24 | Harmless, simulation works correctly |
+
+## IEC 62304 Emergency Stop Analysis — Updated (Phase 4E prep fixes)
+
+### Both safety layers now fully operational
+
+| Layer | Component | Status | Response |
+|---|---|---|---|
+| Layer 1 (Application) | ForceCondition (BT) | ✓ FIXED | 1/3 → 2/3 → 3/3 → SAFETY STOP |
+| Layer 2 (Independent) | SafetyWatchdogNode | ✓ WORKING | 60ms → /emergency_stop |
+
+### Verified sequence after fixes
+t=0ms    Force injection starts
+t=60ms   Watchdog: EMERGENCY STOP published (Layer 2)
+bridge_node: EMERGENCY STOP received -- halted
+t=~80ms  ForceCondition: 1/3 → 2/3 → 3/3 (Layer 1)
+ForceCondition: SAFETY STOP triggered
+BT: Hold leaf cancelled via cancel_goal()
+BT: Surgical procedure FAILED (correct -- dangerous force detected)
+
+### ForceCondition fix — terminate() bug resolved
+
+**Before fix:** `terminate()` reset `_consecutive_high = 0` on every
+SUCCESS tick, preventing the counter from ever reaching 3.
+
+**After fix:** `terminate()` only resets on `INVALID` (BT reset/interrupt).
+Counter now correctly persists between ticks and accumulates to 3.
+
+### Hold server fix — emergency stop subscriber added
+
+Hold server now subscribes to `/emergency_stop` and sets `_emergency=True`.
+The execute loop checks this flag every step and returns early with
+`termination='emergency_stop'` when triggered.
+
+### Clinical meaning of FAILED vs SUCCESS
+
+When force injection occurs during Hold phase:
+- **Before fixes:** procedure completed SUCCESS (ForceCondition never fired)
+- **After fixes:** procedure returns FAILED (correct clinical outcome)
+
+A dangerous force event during the procedure means the surgery did not
+complete safely. The FAILED result is the correct response.

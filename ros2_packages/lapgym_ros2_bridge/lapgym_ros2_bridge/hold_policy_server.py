@@ -19,6 +19,7 @@ import os
 import time
 import numpy as np
 import rclpy
+from std_msgs.msg import Bool
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -48,6 +49,15 @@ class HoldPolicyServer(Node):
             callback_group=ReentrantCallbackGroup(),
         )
 
+        # Emergency stop subscriber
+        self._emergency = False
+        self.create_subscription(
+            Bool,
+            '/emergency_stop',
+            self._emergency_cb,
+            10)
+
+
         self.get_logger().info('HoldPolicyServer ready')
 
     def _load_env(self):
@@ -71,6 +81,12 @@ class HoldPolicyServer(Node):
     def _cancel_cb(self, goal_handle):
         self.get_logger().info('Hold cancel received -- accepting')
         return CancelResponse.ACCEPT
+    
+    def _emergency_cb(self, msg: Bool):
+        if msg.data and not self._emergency:
+            self._emergency = True
+            self.get_logger().error(
+                'Hold server: EMERGENCY STOP received -- halting')
 
     async def _execute_cb(self, goal_handle):
         self.get_logger().info('Hold policy active -- holding position')
@@ -94,6 +110,18 @@ class HoldPolicyServer(Node):
                 result.steps_taken = step
                 result.final_distance = 0.0
                 result.termination = 'preempted'
+                return result
+            
+            # -- Emergency stop check -----------------------------------------
+            if self._emergency:
+                goal_handle.canceled()
+                self.get_logger().error(
+                    f'Hold emergency stop at step {step}')
+                result = Retract.Result()
+                result.success = False
+                result.steps_taken = step
+                result.final_distance = 0.0
+                result.termination = 'emergency_stop'
                 return result
 
             # -- Publish zero action to hold position -------------------------

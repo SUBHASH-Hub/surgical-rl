@@ -71,9 +71,12 @@ class ForceCondition(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
     def terminate(self, new_status: py_trees.common.Status):
-        """Reset consecutive counter on any termination."""
-        self._consecutive_high = 0
-
+        """Only reset counter when explicitly stopping due to SUCCESS.
+        Do NOT reset on RUNNING -- counter must persist between ticks."""
+        if new_status == py_trees.common.Status.INVALID:
+            # BT is being reset or interrupted -- safe to reset counter
+            self._consecutive_high = 0
+            
     def _force_cb(self, msg: Float32):
         """Update current force from topic."""
         self._current_force = float(msg.data)
