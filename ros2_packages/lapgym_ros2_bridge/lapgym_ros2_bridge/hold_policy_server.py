@@ -16,6 +16,7 @@ sys.modules['gym.spaces'] = gymnasium.spaces
 # -----------------------------------------------------------------------------
 
 import os
+import threading
 import time
 import numpy as np
 import rclpy
@@ -49,16 +50,43 @@ class HoldPolicyServer(Node):
             callback_group=ReentrantCallbackGroup(),
         )
 
-        # Emergency stop subscriber
+        # # Surgeon stop -- dedicated background node + thread
+        # # env.step() blocks the main executor so we need a separate thread
+        self._surgeon_stopped = False
+        self._stop_event = threading.Event()
+        self._stop_event.set()
         self._emergency = False
-        self.create_subscription(
-            Bool,
-            '/emergency_stop',
-            self._emergency_cb,
-            10)
+
+        self._stop_context = rclpy.Context()
+        self._stop_context.init()
+
+        self._stop_node = rclpy.create_node(
+            '_surgeon_stop_hold',
+            context=self._stop_context,
+            enable_rosout=False
+        )
+        self._stop_node.create_subscription(
+            Bool, '/surgeon_stop', self._surgeon_cb, 10)
+        self._stop_node.create_subscription(
+            Bool, '/emergency_stop', self._emergency_cb, 10)
+
+        self._stop_executor = rclpy.executors.SingleThreadedExecutor(
+            context=self._stop_context)
+        self._stop_executor.add_node(self._stop_node)
+
+        self._stop_thread = threading.Thread(
+            target=self._spin_stop_node, daemon=True)
+        self._stop_thread.start()
 
 
         self.get_logger().info('HoldPolicyServer ready')
+
+    def _spin_stop_node(self):
+        while self._stop_context.ok():
+            try:
+                self._stop_executor.spin_once(timeout_sec=0.01)
+            except Exception:
+                pass
 
     def _load_env(self):
         try:
@@ -87,7 +115,17 @@ class HoldPolicyServer(Node):
             self._emergency = True
             self.get_logger().error(
                 'Hold server: EMERGENCY STOP received -- halting')
-
+            
+    # add callback
+    def _surgeon_cb(self, msg: Bool):
+        if msg.data:
+            self._surgeon_stopped = True
+            self._stop_event.clear()
+            self.get_logger().warn('Hold: SURGEON STOP received')
+        else:
+            self._surgeon_stopped = False
+            self._stop_event.set()
+            self.get_logger().info('Hold: SURGEON RESUME received')
     async def _execute_cb(self, goal_handle):
         self.get_logger().info('Hold policy active -- holding position')
 
@@ -114,30 +152,47 @@ class HoldPolicyServer(Node):
             
             # -- Emergency stop check -----------------------------------------
             if self._emergency:
-                goal_handle.canceled()
                 self.get_logger().error(
                     f'Hold emergency stop at step {step}')
+                try:
+                    goal_handle.canceled()
+                except Exception:
+                    goal_handle.abort()
                 result = Retract.Result()
                 result.success = False
                 result.steps_taken = step
                 result.final_distance = 0.0
                 result.termination = 'emergency_stop'
                 return result
-
+            
+            # -- Surgeon stop: freeze until resumed ---------------------------
+            while self._surgeon_stopped and not self._emergency:
+                if goal_handle.is_cancel_requested:
+                    break
+                self._stop_event.wait(timeout=0.05)
+            
             # -- Publish zero action to hold position -------------------------
             obs, reward, terminated, truncated, info = self._env.step(zero_action)
             step += 1
 
-            # -- Feedback every 10 steps --------------------------------------
-            if step % 10 == 0:
-                in_collision = bool(info.get('in_collision', False))
-                collision_cost = abs(float(info.get('collision_cost', 0.0) or 0.0))
-                feedback_msg.distance_to_goal = 0.0
-                feedback_msg.distance_mm = 0.0
-                feedback_msg.step = step
-                feedback_msg.in_collision = in_collision
-                feedback_msg.collision_cost = collision_cost
-                goal_handle.publish_feedback(feedback_msg)
+            # --Immediate Surgeon stop: freeze until resumed ---------------------------
+            while self._surgeon_stopped and not self._emergency:
+                if goal_handle.is_cancel_requested:
+                    break
+                self._stop_event.wait(timeout=0.05)
+
+            # -- Feedback every step (for accurate console display)
+            
+            in_collision = bool(info.get('in_collision', False))
+            collision_cost = abs(float(info.get('collision_cost', 0.0) or 0.0))
+            feedback_msg.distance_to_goal = 0.0
+            feedback_msg.distance_mm = 0.0
+            feedback_msg.step = step
+            feedback_msg.in_collision = in_collision
+            feedback_msg.collision_cost = collision_cost
+            goal_handle.publish_feedback(feedback_msg)
+    
+            if step % 5 == 0:
                 self.get_logger().info(
                     f'Holding step {step:3d} | '
                     f'{"COL" if in_collision else "SAFE"}')
@@ -154,6 +209,9 @@ class HoldPolicyServer(Node):
         return result
 
     def destroy_node(self):
+        self._stop_executor.shutdown()
+        self._stop_node.destroy_node()
+        self._stop_context.shutdown()
         if self._env is not None:
             try:
                 self._env.close()

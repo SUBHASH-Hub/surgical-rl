@@ -25,6 +25,7 @@ from rclpy.node import Node
 import py_trees
 import py_trees_ros
 
+from std_msgs.msg import String
 from lapgym_ros2_bridge.action_leaf import ActionLeaf
 from lapgym_ros2_bridge.force_condition import ForceCondition
 
@@ -100,6 +101,15 @@ class SurgicalBTNode(Node):
         self._tree.setup(timeout=30)
         self.get_logger().info('Behaviour tree setup complete')
 
+        # Console feedback publisher
+        self._pub_console = self.create_publisher(
+            String, '/console_feedback', 10)
+        self._current_phase = 'IDLE'
+        self._current_step = 0
+        self._current_max = 300
+        self._current_dist = 0.0
+        self._bt_state = 'WAITING'
+
         # Print tree structure to terminal
         print(py_trees.display.ascii_tree(self._tree.root))
 
@@ -113,6 +123,49 @@ class SurgicalBTNode(Node):
     def _tick(self):
         """Tick the behaviour tree once."""
         self._tree.tick()
+
+        # -- Publish console feedback -----------------------------------------
+        # Detect active phase from tree leaf statuses
+        leaves = self._tree.root.iterate()
+        for leaf in leaves:
+            if leaf.status == py_trees.common.Status.RUNNING:
+                if leaf.name == 'Approach':
+                    self._current_phase = 'APPROACH'
+                    if hasattr(leaf, 'current_step'):
+                        self._current_step = leaf.current_step
+                        self._current_dist = leaf.current_distance
+                        self._current_max = 400
+                elif leaf.name == 'Retract':
+                    self._current_phase = 'RETRACT'
+                    if hasattr(leaf, 'current_step'):
+                        self._current_step = leaf.current_step
+                        self._current_dist = leaf.current_distance
+                        self._current_max = 300
+                elif leaf.name == 'Hold':
+                    self._current_phase = 'HOLD'
+                    if hasattr(leaf, 'current_step'):
+                        self._current_step = leaf.current_step
+                        self._current_dist = leaf.current_distance
+                        self._current_max = 200
+                        
+        root_status = self._tree.root.status
+        if root_status == py_trees.common.Status.RUNNING:
+            self._bt_state = 'RUNNING'
+        elif root_status == py_trees.common.Status.SUCCESS:
+            self._bt_state = 'SUCCESS'
+            self._current_phase = 'COMPLETE'
+        elif root_status == py_trees.common.Status.FAILURE:
+            self._bt_state = 'FAILED'
+
+        feedback = String()
+        feedback.data = (
+            f'{self._current_phase}|'
+            f'{self._current_step}|'
+            f'{self._current_max}|'
+            f'{self._current_dist:.1f}|'
+            f'{self._bt_state}')
+        self._pub_console.publish(feedback)
+
 
         # Check root status
         root_status = self._tree.root.status

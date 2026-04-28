@@ -38,6 +38,9 @@ class ActionLeaf(py_trees.behaviour.Behaviour):
         self._result = None
         self._goal_sent = False
         self._done = False
+        # Console feedback state
+        self.current_step = 0
+        self.current_distance = 0.0
 
     def setup(self, **kwargs):
         """Wait for action server to be available."""
@@ -123,6 +126,8 @@ class ActionLeaf(py_trees.behaviour.Behaviour):
 
     def _feedback_cb(self, feedback_msg):
         fb = feedback_msg.feedback
+        self.current_step = fb.step
+        self.current_distance = fb.distance_mm
         self._node.get_logger().info(
             f'[{self.name}] Step {fb.step:3d} | '
             f'Dist: {fb.distance_mm:.1f}mm | '

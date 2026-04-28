@@ -1,19 +1,19 @@
 """
-Phase 4C: surgical_system.launch.py
+Phase 4C/4E: surgical_system.launch.py
 
 Launches the complete supervised autonomy surgical system with one command:
-
   ros2 launch lapgym_ros2_bridge surgical_system.launch.py
 
 Nodes started:
-  1. bridge_node          -- SOFA simulation + /tissue_force_proxy
+  1. bridge_node            -- SOFA simulation + /tissue_force_proxy
   2. approach_policy_server -- proportional controller to grasping zone
   3. retract_policy_server  -- Phase 2D PPO tissue retraction
   4. hold_policy_server     -- zero-action position hold
-  5. surgical_bt_node       -- Behaviour Tree orchestrator
+  5. safety_watchdog_node   -- independent IEC 62304 force monitor
+  6. surgeon_console        -- terminal dashboard with keyboard control
+  7. surgical_bt_node       -- Behaviour Tree orchestrator (delayed 15s)
 
-All nodes start simultaneously. The BT waits for all action servers
-to become available before ticking (via setup() timeout=30s).
+All nodes start simultaneously except BT which waits 15s for servers.
 
 Author: Subhash Arockiadoss
 """
@@ -62,7 +62,22 @@ def generate_launch_description():
         name='hold_policy_server',
         output='screen')
 
-    # -- Node 5: Behaviour Tree (delayed 15s to allow servers to init) --------
+    # -- Node 5: Safety watchdog (independent process) ------------------------
+    watchdog = Node(
+        package='lapgym_ros2_bridge',
+        executable='safety_watchdog_node',
+        name='safety_watchdog_node',
+        output='screen')
+    
+    # -- Node 6: Surgeon console ----------------------------------------------
+    console = Node(
+        package='lapgym_ros2_bridge',
+        executable='surgeon_console',
+        name='surgeon_console',
+        output='screen',
+        prefix='xterm -e')
+
+    # -- Node 7: Behaviour Tree (delayed 15s to allow servers to init) --------
     bt = TimerAction(
         period=15.0,
         actions=[Node(
@@ -71,13 +86,6 @@ def generate_launch_description():
             name='surgical_bt_node',
             output='screen')])
 
-    # -- Node 6: Safety watchdog (independent process) ------------------------
-    watchdog = Node(
-        package='lapgym_ros2_bridge',
-        executable='safety_watchdog_node',
-        name='safety_watchdog_node',
-        output='screen')
-
     return LaunchDescription([
         render_arg,
         bridge,
@@ -85,5 +93,6 @@ def generate_launch_description():
         retract,
         hold,
         watchdog,
+        console,
         bt,
     ])
