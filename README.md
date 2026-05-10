@@ -1,6 +1,6 @@
 # Surgical RL — Autonomous Tissue Retraction via Safe Reinforcement Learning
 
-> **Building the full AI stack of a surgical autonomy system — from physics simulation to safe RL to surgical perception to ROS 2 middleware.**
+> **Building the complete AI stack of a surgical autonomy system — from physics simulation to safe RL to surgical perception to ROS 2 middleware with human-in-the-loop control.**
 
 ---
 
@@ -8,37 +8,46 @@
 
 During laparoscopic cholecystectomy — gallbladder removal, one of the most common operations worldwide — the surgeon must retract the gallbladder fundus to expose **Calot's triangle** before safe dissection. This retraction must stay within a force window of **0.5–3.0 N**. Too little force: the anatomy is not visible. Too much force: the cystic artery risks tearing.
 
-Surgical outcome quality today varies with surgeon skill. This project builds an AI agent that learns to perform this retraction subtask autonomously in SOFA physics simulation — with safety-aware reward design, curriculum learning, a full surgical perception pipeline, and an architecture that mirrors the layers used in commercial surgical robots (CMR Versius, Medtronic Hugo, Intuitive da Vinci 5).
+Surgical outcome quality today varies with surgeon skill. This project builds an AI agent that learns to perform this retraction subtask autonomously in SOFA physics simulation — with safety-aware reward design, curriculum learning, a full surgical perception pipeline, and a complete ROS 2 architecture that mirrors the layers used in commercial surgical robots (CMR Versius, Medtronic Hugo, Intuitive da Vinci 5).
 
 ---
 
-## Demo — Phase 2D PPO Agent Running Autonomously
+## Demo — Phase 4E: Full System Running Live
 
-> Trained PPO agent performing autonomous tissue retraction across 3 live episodes.
-> Zero hardcoded waypoints. Learned entirely from reward signal across 750,000 simulation steps.
+> SOFA GUI (left) + Surgeon Console (right). Full autonomous procedure:
+> APPROACH → RETRACT (PPO agent) → HOLD, with surgeon S/R/E control active throughout.
 
+**Phase 4 system — 7 ROS 2 nodes, single launch command:**
+
+```bash
+source ~/surgical_robot_lapgym_ws/activate.sh
+ros2 launch lapgym_ros2_bridge surgical_system.launch.py
 ```
-Episode 1:  107 steps · reward −57.20  · ✓ Goal reached  (140 faster than baseline)
-Episode 2:   97 steps · reward −45.96  · ✓ Goal reached  (150 faster than baseline) ← Best
-Episode 3:  186 steps · reward −150.38 · ✓ Goal reached  ( 61 faster than baseline)
-```
+
+**Surgeon console key bindings:**
+
+| Key | Action | Effect |
+|-----|--------|--------|
+| S | Surgeon Stop | Freezes agent mid-trajectory — instrument holds position |
+| R | Resume | Agent continues from exact stop step — no reset |
+| E | Emergency Stop | Halts all nodes — BT reports FAILED |
+| Q | Quit | Closes console (system continues) |
 
 ---
 
 ## Phase-by-Phase Results Summary
 
-| Metric | Phase 1 Scripted | Phase 2D PPO | Phase 3B Visual PPO |
-|--------|-----------------|--------------|---------------------|
-| Observation | Hardcoded waypoints | 7D ground-truth | 132D visual (MobileNetV3) |
-| Goal position available | Yes (hardcoded) | Yes (simulator) | No (removed — real-robot constraint) |
-| Episode reward (mean) | −165.54 | **−97.14** (eval) | −135.3 |
-| Episode length (mean) | 247 steps | **142.3 steps** | 300 steps (truncated) |
-| Goal completion rate | 100% | **100%** | 0% (no goal coordinates) |
-| Collision steps | 49/ep | 85.7/ep | **0 / 3,000 steps** |
-| Force proxy | None | None | **0.128 px/frame calibrated** |
-| Training duration | — | 13h 10min | 14h 6min |
-
-**The key result from Phase 3:** removing `goal_xyz` from the observation causes complete regression from 100% to 0% task completion, while collision safety improves to zero. This isolates the observation gap precisely — the only variable that changed between Phase 2D and Phase 3B was goal coordinate availability.
+| Metric | Phase 1 Scripted | Phase 2D PPO | Phase 3B Visual PPO | Phase 4 ROS 2 |
+|--------|-----------------|--------------|---------------------|---------------|
+| Observation | Hardcoded waypoints | 7D ground-truth | 132D visual (MobileNetV3) | 7D (Phase 2D agent) |
+| Goal position | Yes (hardcoded) | Yes (simulator) | No (real-robot constraint) | Yes (via action server) |
+| Episode reward (mean) | −165.54 | **−97.14** (eval) | −135.3 | −97.14 (same agent) |
+| Episode length (mean) | 247 steps | **142.3 steps** | 300 steps (truncated) | 119–134 steps (observed) |
+| Goal completion rate | 100% | **100%** | 0% (no goal coordinates) | **100%** (integrated) |
+| Collision steps | 49/ep | 85.7/ep | **0 / 3,000 steps** | 0 (watchdog active) |
+| Force proxy | None | None | **0.128 px/frame** | Published at 50Hz |
+| Safety layer | None | None | Calibrated thresholds | IEC 62304-inspired watchdog |
+| Human control | None | None | None | **S/R/E surgeon console** |
 
 📊 **Phase 2 training metrics — all 4 runs:**
 [W&B Report — Phase 2](https://api.wandb.ai/links/subhashtronics-de-montfort-university-leicester/kqbip2vh)
@@ -51,41 +60,93 @@ Episode 3:  186 steps · reward −150.38 · ✓ Goal reached  ( 61 faster than 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  PHASE 4 — ROS 2 Middleware + Behaviour Tree Planner [PLANNED]  │
-│  lapgym_ros2_bridge · /tissue_force_proxy @ 50Hz                │
-│  py_trees_ros BT · Fallback safety monitor · IEC 62304 Class B  │
-│  Emergency stop watchdog (ISO 14971 independent risk control)   │
-├─────────────────┬───────────────────┬───────────────────────────┤
-│  Approach       │  Retract          │  Hold                     │
-│  RL policy 1    │  RL policy 2 ✓   │  RL policy 3              │
-│                 │  Phase 2D agent   │                           │
-├─────────────────┴───────────────────┴───────────────────────────┤
-│  PHASE 3 — Surgical Perception Pipeline  [COMPLETE ✓]           │
-│  MobileNetV3-Small instrument tip detection (5.1px MAE)         │
-│  UNet + MobileNetV3 tissue segmentation (IoU=1.000)             │
-│  Farneback optical flow tissue force proxy (0.128 px/frame)     │
-│  /tissue_force_proxy → alert=0.35 · safety_stop=1.0 px/frame   │
-├─────────────────────────────────────────────────────────────────┤
-│  PHASE 2 — Safe RL Core  [COMPLETE ✓]                           │
-│  PPO · SafeRewardWrapper · 3-phase curriculum · 7D observation  │
-│  136,711 parameters · λ_collision = 0.1 → 0.3 → 0.5            │
-├─────────────────────────────────────────────────────────────────┤
-│  PHASE 1 — SOFA v25.12 FEM Physics Engine  [COMPLETE ✓]         │
-│  LapGym · Tissue 27,040 Pa · 1,479 nodes · RCM constraint       │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  PHASE 4 — ROS 2 Middleware + Supervised Autonomy  [COMPLETE ✓]     │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  LAYER 5 — surgeon_console (Phase 4E)                        │   │
+│  │  curses terminal · S/R/E/Q keys · /surgeon_stop · /estop    │   │
+│  └────────────────────────┬─────────────────────────────────────┘   │
+│                            │ /console_feedback                       │
+│  ┌─────────────────────────▼────────────────────────────────────┐   │
+│  │  LAYER 4 — surgical_bt_node (Phase 4D)                       │   │
+│  │  py_trees_ros · Root → SafetyMonitor → Sequence              │   │
+│  │  Approach → Retract → Hold · ForceCondition guard            │   │
+│  └────────────────────────┬─────────────────────────────────────┘   │
+│                  ROS 2 Action (lapgym_interfaces/Retract)            │
+│  ┌──────────────┬──────────▼──────────┬──────────────────────────┐  │
+│  │  LAYER 3 — Action Servers (Phase 4B)                          │  │
+│  │  approach_policy_server  │  retract_policy_server             │  │
+│  │  proportional controller │  Phase 2D PPO agent                │  │
+│  │  hold_policy_server      │  zero-action position hold         │  │
+│  │  Each: separate rclpy.Context · 10ms spin · dual freeze loop  │  │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  LAYER 2 — safety_watchdog_node (Phase 4C)                   │   │
+│  │  Independent process · 50Hz · IEC 62304 Class B              │   │
+│  │  ALERT=0.35 px/frame · STOP=1.0 px/frame                     │   │
+│  │  Cannot be blocked by application logic                      │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  LAYER 1 — sofa_bridge_node (Phase 4A)                       │   │
+│  │  SOFA↔ROS2 bridge · 50Hz · teleop fallback                   │   │
+│  │  /tissue_force_proxy · /joint_states · /camera/image_raw     │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────┤
+│  PHASE 3 — Surgical Perception Pipeline  [COMPLETE ✓]               │
+│  MobileNetV3-Small instrument tip detection (5.1px MAE)             │
+│  UNet + MobileNetV3 tissue segmentation (IoU=1.000)                 │
+│  Farneback optical flow tissue force proxy (0.128 px/frame)         │
+│  /tissue_force_proxy → alert=0.35 · safety_stop=1.0 px/frame        │
+├─────────────────────────────────────────────────────────────────────┤
+│  PHASE 2 — Safe RL Core  [COMPLETE ✓]                               │
+│  PPO · SafeRewardWrapper · 3-phase curriculum · 7D observation       │
+│  136,711 parameters · λ_collision = 0.1 → 0.3 → 0.5                │
+├─────────────────────────────────────────────────────────────────────┤
+│  PHASE 1 — SOFA v25.12 FEM Physics Engine  [COMPLETE ✓]             │
+│  LapGym · Tissue 27,040 Pa · 1,479 nodes · RCM constraint           │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-This architecture maps directly to real surgical robots:
+**Industry mapping — how this project mirrors commercial surgical robots:**
 
 | Layer | CMR Versius / Medtronic Hugo | This Project |
 |-------|------------------------------|--------------|
-| Inner control loop | Proprietary servo (500–1000 Hz) | SOFA C++ FEM physics |
-| Middleware | ROS 2 based control stack | ROS 2 Humble (Phase 4) |
+| Inner control loop | Proprietary servo (500–1000 Hz) | SOFA C++ FEM physics (~15Hz) |
+| Middleware | ROS 2 based control stack | ROS 2 Humble — 7 nodes |
 | Intelligence | AI policy + task planner | PPO agent + BT planner |
 | Perception | Endoscopic camera + tracking | MobileNetV3 + UNet (Phase 3) |
 | Force sensing | Instrument force sensors | Optical flow proxy (Phase 3C) |
-| Safety | Independent watchdog + limits | BT Fallback + watchdog node |
+| Safety | Independent watchdog + limits | safety_watchdog_node at 50Hz |
+| Human control | Surgeon console | surgeon_console S/R/E |
+
+---
+
+## Phase 4 — Complete Node Table
+
+| Node | Role | Hz | Status |
+|------|------|----|--------|
+| `sofa_bridge_node` | SOFA↔ROS2 bridge, teleop fallback | 50 | ✅ Phase 4A |
+| `approach_policy_server` | Proportional controller to grasping zone | ~15 | ✅ Phase 4B |
+| `retract_policy_server` | Phase 2D PPO autonomous retraction | ~15 | ✅ Phase 4B |
+| `hold_policy_server` | Zero-action position hold | ~10 | ✅ Phase 4B |
+| `safety_watchdog_node` | IEC 62304-inspired force monitor | 50 | ✅ Phase 4C |
+| `surgical_bt_node` | Behaviour tree orchestrator | 10 | ✅ Phase 4D |
+| `surgeon_console` | Human-in-the-loop terminal UI | 10 | ✅ Phase 4E |
+
+**ROS 2 topics:**
+
+| Topic | Type | Publisher | Subscribers |
+|-------|------|-----------|-------------|
+| `/tissue_force_proxy` | Float32 | sofa_bridge_node | safety_watchdog_node, surgeon_console |
+| `/surgeon_stop` | Bool | surgeon_console | approach, retract, hold servers |
+| `/emergency_stop` | Bool | surgeon_console | all nodes |
+| `/watchdog_status` | String | safety_watchdog_node | surgeon_console |
+| `/watchdog_heartbeat` | Bool | safety_watchdog_node | surgeon_console |
+| `/console_feedback` | String | surgical_bt_node | surgeon_console |
+| `/joint_states` | JointState | sofa_bridge_node | surgical_bt_node |
 
 ---
 
@@ -111,7 +172,7 @@ Built the SOFA + LapGym simulation environment and established the scripted base
 
 **Clinical question:** Can an agent learn to retract tissue safely without exceeding the force limits that would tear a cystic duct?
 
-Replaced the scripted waypoint trajectory with a PPO agent trained with safety-aware reward decomposition and three-phase curriculum learning. Four training runs — each one diagnosing and fixing the previous failure.
+Four training runs — each one diagnosing and fixing the previous failure.
 
 #### The Four Training Runs
 
@@ -147,65 +208,27 @@ R_efficiency = −0.01 per step              ← encourages shorter episodes
 
 **Clinical question:** Can a perception module extract surgical state from endoscopic video, replacing ground-truth simulator coordinates the way a real surgical robot must operate?
 
-Phase 3 is the transition from lab RL to real surgical robotics industry architecture. Phase 2 used privileged simulator coordinates unavailable on any real robot. Phase 3 replaces those with camera-based perception — the actual architecture used in Moon Surgical Maestro, NVIDIA Holoscan, and surgical AI research at Imperial, Johns Hopkins, and ETH Zurich.
-
 #### Phase 3A — Standalone Surgical Perception Module
 
-Built two independent perception models from 7,284 RGB frames collected from the SOFA camera:
-
 **Instrument tip detector — MobileNetV3-Small:**
-- 1,001,251 parameters · backbone + regression head
-- Two-phase transfer learning (10 epochs frozen + 20 epochs fine-tune)
 - **Result: 5.1px mean pixel error on 480×480 — below the 10px surgical AI threshold**
 - Architecture reference: Moon Surgical ScoPilot · deployable on NVIDIA IGX Holoscan
 
 **Tissue segmentation — UNet + MobileNetV3:**
-- 1,729,217 parameters · MobileNetV3 encoder + 3-stage UNet decoder
-- Labels generated from SOFA mesh projection through OpenGL camera matrices
 - **Result: IoU = 1.000 on simulation test set · 6,701 masks · 21.1% tissue coverage**
 
-**Git tags:** `v3.0-phase3a-tip-detector` · `v3.1-phase3a-complete`
-
-#### Phase 3B — Multimodal Visual Observation Integration
-
-Replaced the 7D ground-truth observation with a 132D visual observation:
-
-```
-obs = [MobileNetV3_visual_features(128) + estimated_xyz(3) + phase_flag(1)]
-    = 132D  (vs 7D in Phase 2D)
-```
-
-New environment: `TissueRetractionV3` wrapping V2 with perception pipeline.
-
-**Result:**
+#### Phase 3B — Visual Observation Integration
 
 | Metric | Phase 2D (ground-truth) | Phase 3B (visual) | Change |
 |--------|------------------------|-------------------|--------|
-| ep_rew_mean | −97.14 (eval) | −135.3 | −38.9% |
-| ep_len_mean | 142.3 | 300 (truncated) | +110.8% |
 | Goal rate | **100%** | **0%** | Full regression |
-| Action std | 1.700 (exploring) | 0.583 (converged) | Local optimum |
+| ep_rew_mean | −97.14 (eval) | −135.3 | −38.9% |
 
-**Root cause:** removing `goal_xyz` eliminates the navigational gradient. The agent improved reward 47.6% by learning collision avoidance but cannot navigate to the goal without knowing where it is. This is the expected and honest result of clinically realistic observation design — it directly quantifies the cost of operating without privileged simulator information.
-
-**Git tag:** `v3.2-phase3b-complete`
+**Root cause:** Removing `goal_xyz` eliminates the navigational gradient. This directly quantifies the cost of operating without privileged simulator information — a publishable finding that most surgical RL papers avoid reporting honestly.
 
 #### Phase 3C — Visual Tissue Force Proxy
 
-Built a Farneback dense optical flow system that measures tissue deformation between consecutive frames as a force proxy — formalising the visual judgement surgeons make when estimating tissue stress from screen.
-
-**Pipeline:**
-```
-frame(t).copy() + frame(t+1)
-  → cv2.calcOpticalFlowFarneback (pyr_scale=0.5, levels=3, winsize=15)
-  → flow(480, 480, 2) — u and v displacement per pixel
-  → magnitude = sqrt(u² + v²)
-  → tissue_ROI_mask (from Phase 3A · 48,558 pixels · 21.1% of frame)
-  → mean magnitude in tissue region = tissue_force_proxy (px/frame)
-```
-
-**Key engineering fix — Python object aliasing:**
-The render buffer was updated in-place between frames. Both `frame_prev` and `frame_curr` pointed to the same array — optical flow between identical arrays is always zero. Fixed by `rgb_frame.copy()` in `tissue_retraction_v3.py` and `frame_curr.copy()` in the optical flow script.
+Farneback dense optical flow measuring tissue deformation as a force proxy — formalising the visual judgement surgeons make when estimating tissue stress from screen.
 
 **Results — 10 episodes, 3,000 steps:**
 
@@ -214,88 +237,135 @@ The render buffer was updated in-place between frames. Both `frame_prev` and `fr
 | Mean tissue flow | **0.128 px/frame** |
 | Max tissue flow | **0.732 px/frame** |
 | Collision steps | **0 / 3,000 (0%)** |
-| Alert threshold (calibrated) | 0.35 px/frame (mean + 2×std) |
+| Alert threshold | 0.35 px/frame |
 | Safety stop threshold | 1.0 px/frame |
-| Steps above alert | 141 / 3,000 (4.7%) |
-| Steps above safety stop | 0 / 3,000 (0%) |
 
-Zero collision steps confirms Phase 3B agent learned safe tissue interaction. Pearson r = NaN — mathematically correct because collision flag variance is zero (agent never collided).
+**Git tags:** `v3.0` through `v3.4-phase3d-complete`
 
-**Phase 4 ROS 2 interface defined:**
-```json
-{
-  "phase4_topic":                "/tissue_force_proxy",
-  "phase4_alert_threshold":      0.35,
-  "phase4_safety_stop_threshold": 1.0
-}
+---
+
+### ✅ Phase 4 — ROS 2 Middleware + Supervised Autonomy + Safety Architecture (Months 7–8)
+
+**Clinical question:** Can the RL agent and perception capabilities be integrated into a ROS 2 architecture that mirrors commercial surgical robots — with a certifiable safety layer and human-in-the-loop control?
+
+#### Phase 4A — ROS 2 Bridge (`sofa_bridge_node`)
+
+Mapped SOFA simulation coordinates to the ROS 2 world frame. Solved the coordinate transform between FEM physics engine and robot kinematic model.
+
+- Published `/tissue_force_proxy`, `/joint_states`, `/camera/image_raw` at 50Hz
+- Teleoperation node for keyboard/joystick control (industry today — teleoperation track)
+- SOFA headless mode with RenderMode.HEADLESS for production, RenderMode.HUMAN for demo
+
+**Git tag:** `v4.0-phase4a-complete`
+
+#### Phase 4B — RL Policy Action Servers
+
+Wrapped the PPO agent as a ROS 2 action server using `lapgym_interfaces/action/Retract`.
+
+**Key engineering decision — Separate ROS 2 Context per server:**
+
+`env.step()` is a ~65ms synchronous SOFA blocking call. During this time the Python GIL is held and no ROS 2 callback can fire. Solution: each server creates an isolated DDS instance via `rclpy.Context()` with its own executor on a background thread at 10ms spin timeout.
+
+```python
+# Each server has this pattern
+self._stop_context = rclpy.Context()
+self._stop_context.init()
+self._stop_node = rclpy.create_node('_surgeon_stop_approach',
+                                     context=self._stop_context)
+self._stop_executor = rclpy.executors.SingleThreadedExecutor(
+                         context=self._stop_context)
+self._stop_thread = threading.Thread(target=self._spin_stop_node, daemon=True)
 ```
 
-**Industry reference:** Medtronic Touch Surgery · NVIDIA Holoscan tissue deformation monitoring
+**Dual freeze loop pattern** — two surgeon stop checks per execute cycle (before and after `env.step()`) bounds stop latency to at most one physics step (~65ms).
 
-**Git tag:** `v3.3-phase3c-complete`
+**Git tag:** `v4.1-phase4b-complete`
 
-#### Phase 3D — Sim-to-Real Gap Analysis
+#### Phase 4C — Safety Watchdog (`safety_watchdog_node`)
 
-Systematic documentation of every gap between SOFA LapGym simulation and a real laparoscopic surgical robot. Required for Phase 5 paper and Phase 4 deployment planning.
+Independent process per IEC 62304 requirements — cannot be blocked by application logic.
 
-**14 gaps across 5 categories. 3 critical.**
+- Runs at **50Hz** — independent of the 15Hz SOFA physics loop
+- Monitors `/tissue_force_proxy` against Phase 3C calibrated thresholds
+- `ALERT` state at 0.35 px/frame — warns BT to slow approach
+- `STOP` state at 1.0 px/frame — publishes `/emergency_stop=True`
+- Publishes `/watchdog_status` and `/watchdog_heartbeat` for console display
 
-| Category | Gaps | Critical | Addressed |
-|----------|------|----------|-----------|
-| Visual appearance | 3 | 0 | 0 |
-| Physics and mechanics | 3 | 1 | 0 |
-| Sensing and observation | 3 | 1 | 1 (Phase 3C) |
-| Task definition | 3 | 1 | 0 |
-| Infrastructure | 2 | 0 | 0 |
+**IEC 62304 design intent:** Safety-critical functions run in processes independent of the application logic they protect. The watchdog subscribes to `/tissue_force_proxy` independently — even if the BT or action servers hang, the watchdog continues monitoring.
 
-Critical gaps for Phase 4: contact modelling calibration (UncoupledConstraintCorrection compliance), force sensing (addressed by Phase 3C), episode safety (Phase 4 supervisory safety layer).
+**Git tag:** `v4.2-phase4c-complete`
 
-Full analysis: [`docs/phase3/phase3d_sim_to_real_gap_analysis.md`](docs/phase3/phase3d_sim_to_real_gap_analysis.md)
+#### Phase 4D — Behaviour Tree (`surgical_bt_node`)
 
-**Git tag:** `v3.4-phase3d-complete`
+Orchestrates the full surgical sequence using `py_trees_ros`.
 
-#### Phase 3 — Complete Git Tags
+```
+Root (Sequence)
+└── SafetyMonitor (Fallback)
+    ├── SurgicalSequence (Sequence)
+    │   ├── Approach  (ActionLeaf → approach_policy)
+    │   ├── Retract   (ActionLeaf → retract_policy)
+    │   └── Hold      (ActionLeaf → hold_policy)
+    └── ForceWatchdog (Condition — /tissue_force_proxy < 0.35)
+```
+
+**Why BT over FSM:** BT Fallback node provides continuous force monitoring that preempts task execution natively. FSMs require explicit emergency transitions from every state — O(n) complexity that becomes a verification burden under IEC 62304. BTs are deterministic, auditable, and formally verifiable. Architecture matches Hannaford et al. (2018) — the reference paper for behaviour trees in medical procedures.
+
+**Git tag:** `v4.4-phase4d-complete`
+
+#### Phase 4E — Surgeon Console (`surgeon_console`)
+
+Terminal-based human-in-the-loop control interface replicating the surgeon console layer of real surgical robots.
+
+**Live telemetry display:**
+```
+============================================================
+            SURGICAL ROBOT CONSOLE  v1.0
+============================================================
+PHASE:    RETRACT          STEP:  117 / 300
+DISTANCE: 6.0mm            FORCE: 0.000
+WATCHDOG: ● NOMINAL        ESTOP: CLEAR
+BT STATE: RUNNING [SURGEON STOPPED]
+------------------------------------------------------------
+      [S] STOP    [R] RESUME    [E] EMERGENCY    [Q] QUIT
+============================================================
+Event log:
+[13:52:04] [S] STOP  phase=RETRACT step=044 dist=86.7mm
+[13:52:11] [R] RESUME phase=RETRACT step=050 dist=79.2mm
+```
+
+**Hardest engineering problem:** Stop latency bounded by SOFA `env.step()` execution time (~65ms per step). This is the sim-to-real gap made visible — on a real surgical robot, stop latency is hardware-bounded by PWM torque cutoff (<1ms) regardless of software state. Knowing that gap exists, why it exists, and how to document it is what IEC 62304 Class C software development means in practice.
+
+**Verified integration test:**
+```
+APPROACH → [S] freeze → [R] resume → goal_reached steps=119
+RETRACT  → [S] freeze → [R] resume → goal_reached steps=134 dist=2.6mm
+HOLD     → [S] freeze → [R] resume → [E] emergency → ESTOP ACTIVE
+```
+
+**Git tag:** `v4.5-phase4e-complete`
+
+#### Phase 4 — Complete Git Tags
 
 | Tag | Description |
 |-----|-------------|
-| `v3.0-phase3a-tip-detector` | MobileNetV3 tip detector — 5.1px MAE |
-| `v3.1-phase3a-complete` | All Phase 3A sub-steps complete |
-| `v3.2-phase3b-complete` | PPO retrained on 132D visual observation |
-| `v3.3-phase3c-complete` | Optical flow force proxy validated |
-| `v3.4-phase3d-complete` | Sim-to-real gap analysis complete |
+| `v4.0-phase4a-complete` | ROS 2 bridge, coordinate mapping, teleop |
+| `v4.1-phase4b-complete` | Action servers, separate context pattern |
+| `v4.2-phase4c-complete` | Safety watchdog at 50Hz |
+| `v4.4-phase4d-complete` | Behaviour tree orchestration |
+| `v4.5-phase4e-complete` | Surgeon console S/R/E — system complete |
 
 ---
 
-### 📋 Phase 4 — ROS 2 Middleware + Supervised Autonomy + Safety Architecture (Months 7–8)
+### 📋 Phase 5 — Evaluation, Benchmarking and Research Paper (Planned)
 
-**Clinical question:** Can the perception and RL capabilities from Phases 2–3 be integrated into a ROS 2 middleware stack that mirrors commercial surgical robots — supporting both teleoperation (industry today) and supervised autonomy (industry R&D) — with a certifiable safety layer?
+**Quantitative evaluation:**
+- Task success rate, stop latency measurement, collision rate with/without safety watchdog
+- Comparison: PPO agent vs proportional controller on retraction task
+- Ablation: with/without surgeon stop, with/without BT, with/without force watchdog
+- Safety stress test: 2× tissue stiffness, sensor noise injection, 100ms actuation delay
 
-**Two tracks built simultaneously:**
-
-**Track 1 — Industry Today (Teleoperation):** Keyboard/joystick controls SOFA instrument via ROS 2 topics at 50 Hz, mirroring how CMR Versius and Medtronic Hugo connect surgeon consoles to robot actuators.
-
-**Track 2 — Industry R&D (Supervised Autonomy):** Phase 2D PPO agent wrapped as a ROS 2 action server, orchestrated by a Behaviour Tree with continuous force-based safety monitoring.
-
-**Sub-steps:**
-
-- **4A:** `lapgym_ros2_bridge` package — `/joint_states`, `/tissue_force_proxy`, `/camera/image_raw` at 50 Hz · teleoperation node
-- **4B:** RL policy action servers — `RetractPolicyServer` (Phase 2D PPO), `ApproachPolicyServer`, `HoldPolicyServer` · all implement `is_preempted()` every step
-- **4C:** `py_trees_ros` Behaviour Tree — Root Sequence with Fallback safety monitor (tissue_force < 0.35 → proceed, else EMERGENCY_STOP) then Approach → Retract → Hold
-- **4D:** Independent safety watchdog — separate process, subscribes independently, hard stop if force > 1.0 px/frame for 3 consecutive readings, IEC 62304 traceability logging
-- **4E:** `docs/iec62304_classification.md` — Class B software classification, safety architecture, stochastic policy documented under IEC 62304 §5.1.7
-
-**Why Behaviour Tree over FSM:** BT Fallback node provides continuous force monitoring that preempts task execution natively. FSMs require explicit emergency transitions from every state — O(n) complexity that becomes a verification burden under IEC 62304. BTs are deterministic, auditable, and formally verifiable.
-
-**Why not LLM/VLA models:** Non-deterministic, cannot satisfy IEC 62304 traceability requirements, 50–200ms inference latency incompatible with 50 Hz control loop, no formal safety guarantee on force limits.
-
----
-
-### 📋 Phase 5 — Evaluation, Safety Analysis, Portfolio (Months 9–10)
-
-- 5-condition ablation study showing contribution of each component
-- Safety stress test: 2× tissue stiffness, sensor noise, 100ms actuation delay
-- Paper-style technical report (6–8 pages, methods + results + safety analysis)
-- 90-second screen recording demo of BT-orchestrated full retraction sequence
+**Research paper target:** ISMR 2026 / IROS 2026 workshop / IEEE RA-L
 
 ---
 
@@ -304,63 +374,63 @@ Full analysis: [`docs/phase3/phase3d_sim_to_real_gap_analysis.md`](docs/phase3/p
 ```
 surgical-rl/
 ├── docs/
-│   ├── project-overview.md               ← Clinical motivation and architecture
-│   ├── baseline_metrics.md               ← Phase 1 official baseline (3-run mean)
-│   ├── scene_graph_analysis.md           ← SOFA FEM parameters, RCM constraint
-│   ├── compatibility_fixes.md            ← 5 LapGym fixes for SOFA v25 + NumPy 2.x
-│   ├── phase2a_results.md                ← Phase 2A analysis
-│   ├── phase2b_results.md                ← Phase 2B analysis
-│   ├── phase2c_results.md                ← Phase 2C training analysis and root cause
-│   ├── phase2d_results.md                ← Phase 2D final results + shock fix
-│   ├── eval_results_phase2.md            ← 10-episode eval: PPO vs baseline
-│   └── phase3/
-│       ├── README.md                     ← Phase 3 navigator — all sub-phases
-│       ├── phase3a_results.md            ← Tip detector + segmentation results
-│       ├── phase3b_results.md            ← Visual PPO results and gap analysis
-│       ├── phase3c_results.md            ← Optical flow force proxy results
-│       └── phase3d_sim_to_real_gap_analysis.md  ← 14 gaps documented
+│   ├── project-overview.md
+│   ├── baseline_metrics.md
+│   ├── scene_graph_analysis.md
+│   ├── compatibility_fixes.md
+│   ├── phase2a_results.md through phase2d_results.md
+│   ├── eval_results_phase2.md
+│   ├── phase3/
+│   │   ├── README.md
+│   │   ├── phase3a_results.md
+│   │   ├── phase3b_results.md
+│   │   ├── phase3c_results.md
+│   │   └── phase3d_sim_to_real_gap_analysis.md
+│   └── phase4/
+│       ├── phase4a_ros2_bridge.md
+│       ├── phase4b_action_servers.md
+│       ├── phase4c_safety_watchdog.md
+│       ├── phase4d_behaviour_tree.md
+│       └── phase4e_surgeon_console.md      ← IEC 62304 design decisions
 ├── envs/
-│   ├── safe_reward.py                    ← SafeRewardWrapper — 4-component reward
-│   ├── tissue_retraction_v2.py           ← TissueRetractionV2 — 7D obs (Phase 2)
-│   ├── tissue_retraction_v3.py           ← TissueRetractionV3 — 132D visual obs (Phase 3)
-│   └── perception_pipeline.py            ← MobileNetV3 feature extractor + xyz head
+│   ├── safe_reward.py
+│   ├── tissue_retraction_v2.py
+│   ├── tissue_retraction_v3.py
+│   └── perception_pipeline.py
+├── ros2_packages/
+│   └── lapgym_ros2_bridge/
+│       ├── lapgym_ros2_bridge/
+│       │   ├── sofa_bridge_node.py
+│       │   ├── approach_policy_server.py
+│       │   ├── retract_policy_server.py
+│       │   ├── hold_policy_server.py
+│       │   ├── safety_watchdog_node.py
+│       │   ├── surgical_bt_node.py
+│       │   ├── action_leaf.py
+│       │   └── surgeon_console.py
+│       ├── launch/
+│       │   └── surgical_system.launch.py
+│       └── package.xml
+├── lapgym_interfaces/
+│   └── action/
+│       └── Retract.action
 ├── models/
-│   ├── tip_detector/
-│   │   ├── mobilenetv3_tip_best.pth      ← Tip detector · 5.1px MAE
-│   │   └── eval_metrics.json
-│   ├── segmentation/
-│   │   ├── unet_seg_best.pth             ← Tissue segmentation · IoU=1.000
-│   │   └── eval_metrics.json
-│   └── force_proxy/
-│       └── proxy_config.json             ← Calibrated thresholds · Phase 4 topic
+│   ├── tip_detector/mobilenetv3_tip_best.pth
+│   ├── segmentation/unet_seg_best.pth
+│   └── force_proxy/proxy_config.json
 ├── scripts/
-│   ├── baseline_demo.py                  ← Phase 1 scripted baseline
-│   ├── train_ppo.py                      ← Phase 2 PPO training
-│   ├── eval_agent.py                     ← PPO vs scripted comparison
-│   ├── watch_agent.py                    ← HUMAN mode demo
-│   ├── collect_rgb_frames.py             ← Phase 3A frame collection
-│   ├── train_tip_detector.py             ← Phase 3A MobileNetV3 training
-│   ├── generate_seg_masks.py             ← Phase 3A mask generation
-│   ├── train_segmentation.py             ← Phase 3A UNet training
-│   ├── visualise_predictions.py          ← Phase 3A overlay visualisations
-│   ├── train_ppo_visual.py               ← Phase 3B visual PPO training
-│   └── optical_flow_proxy.py             ← Phase 3C Farneback force proxy
+│   ├── baseline_demo.py
+│   ├── train_ppo.py
+│   ├── eval_agent.py
+│   ├── watch_agent.py
+│   ├── train_tip_detector.py
+│   ├── train_segmentation.py
+│   ├── train_ppo_visual.py
+│   └── optical_flow_proxy.py
 ├── logs/
 │   └── checkpoints/
-│       ├── phase2_ppo_tissue_retraction_20260409_211946/   ← Phase 2D checkpoint
-│       └── phase3b_ppo_visual_20260413_152851/             ← Phase 3B checkpoint
-├── data/
-│   ├── rgb_frames/                       ← 7,284 PNGs + labels.csv (gitignored)
-│   ├── seg_masks/                        ← 6,701 binary masks (gitignored)
-│   └── optical_flow/
-│       ├── flow_log.csv                  ← 3,000 rows: ep, step, flow, collision
-│       └── flow_validation_plot.png      ← scatter + distribution plot
-├── agents/
-│   └── ppo_config.yaml                   ← PPO hyperparameters
-├── configs/
-│   └── phase2_baseline.yaml              ← Phase 2D config
-├── setup_env.sh                          ← Activates sofa_venv + sets env vars
-└── requirements.txt                      ← Pinned dependencies
+│       └── phase2_ppo_tissue_retraction_20260409_211946/ppo_tissue_final
+└── requirements.txt
 ```
 
 ---
@@ -372,6 +442,7 @@ surgical-rl/
 - Ubuntu 22.04
 - NVIDIA GPU with CUDA 12.x
 - Python 3.10
+- ROS 2 Humble
 - [SOFA v25.12 pre-built binary](https://github.com/sofa-framework/sofa/releases/tag/v25.12.00) extracted to `~/surgical_robot_lapgym_ws/sofa_install/`
 - [LapGym](https://github.com/ScheiklP/lap_gym) cloned to `~/surgical_robot_lapgym_ws/lap_gym/`
 
@@ -385,7 +456,7 @@ source setup_env.sh
 pip install -r requirements.txt
 ```
 
-### Watch the Phase 2D PPO agent (fastest demo)
+### Watch the Phase 2D PPO agent (fastest demo — no ROS 2 required)
 
 ```bash
 source setup_env.sh
@@ -393,12 +464,16 @@ python scripts/watch_agent.py --slow --episodes 3
 # SOFA GUI opens — agent retracts tissue autonomously in ~130 steps
 ```
 
-### Run Phase 3A perception inference
+### Run the full Phase 4 ROS 2 system
 
 ```bash
-source setup_env.sh
-python scripts/visualise_predictions.py
-# Generates overlay images: green crosshair (predicted tip) · cyan mask (tissue)
+source ~/surgical_robot_lapgym_ws/activate.sh
+cd ~/surgical_robot_lapgym_ws/ros2_ws
+colcon build --packages-select lapgym_ros2_bridge lapgym_interfaces
+source install/setup.bash
+cd ~/surgical_robot_lapgym_ws/surgical-rl
+ros2 launch lapgym_ros2_bridge surgical_system.launch.py
+# Surgeon console opens in xterm — press S to stop, R to resume, E for emergency
 ```
 
 ### Run Phase 3C optical flow force proxy
@@ -406,16 +481,7 @@ python scripts/visualise_predictions.py
 ```bash
 source setup_env.sh
 python3 -u scripts/optical_flow_proxy.py
-# Runs 10 episodes · logs flow_log.csv · saves flow_validation_plot.png
-# Expected: mean_tissue_flow ≈ 0.128 px/frame · 0 collision steps
-```
-
-### Train Phase 3B visual PPO from scratch
-
-```bash
-source setup_env.sh
-python scripts/train_ppo_visual.py
-# ~14 hours on GTX 1650 · 750k steps · checkpoint saved automatically
+# 10 episodes · logs flow_log.csv · mean_tissue_flow ≈ 0.128 px/frame · 0 collisions
 ```
 
 ---
@@ -424,15 +490,19 @@ python scripts/train_ppo_visual.py
 
 **Why SOFA + LapGym:** SOFA provides finite element method (FEM) deformable body simulation. LapGym wraps SOFA in the Gymnasium interface. Intuitive Surgical Research funds LapGym development — it is the standard academic surgical simulation platform.
 
-**Why MobileNetV3 for perception:** MobileNetV3-Small is the architecture class used by Moon Surgical ScoPilot for real-time instrument tracking. It is deployable on NVIDIA IGX Holoscan — the hardware target for surgical AI at the edge. Under 5M parameters, runs in real time on GTX 1650.
+**Why separate rclpy.Context per action server:** `env.step()` is a ~65ms synchronous blocking call. The Python GIL prevents any callback from firing during this time. A separate `rclpy.Context()` creates an isolated DDS instance that spins on its own background thread — the only architecture that allows surgeon stop callbacks to fire during SOFA physics computation.
 
-**Why optical flow for force proxy:** SOFA's `BlockGaussSeidelConstraintSolver` stores contact forces internally — not accessible via `MechanicalObject.force`. Farneback dense optical flow measures tissue deformation directly from the camera frame, matching the visual judgement surgeons make. Medtronic Touch Surgery and NVIDIA Holoscan use this approach in real systems.
+**Why dual freeze loops:** One freeze loop before `env.step()` and one after bounds stop latency to at most one physics step (~65ms). Without the second loop, the agent could run one full step after the surgeon pressed stop.
+
+**Why IEC 62304-inspired safety watchdog as independent process:** IEC 62304 mandates that safety-critical functions run in processes independent of the application logic they protect. The watchdog subscribes to `/tissue_force_proxy` independently — even if the BT or action servers hang, the watchdog continues monitoring.
 
 **Why Behaviour Tree over FSM:** BT Fallback node provides continuous force monitoring that preempts task execution natively — architecturally impossible to express cleanly in an FSM without O(n) emergency state logic. CMR Surgical's published architecture research uses BTs for surgical task sequencing.
 
-**Why not LLM planner:** LLM-based planners are stochastic and non-deterministic. They cannot be validated under IEC 62304 or ISO 14971. BT transitions are deterministic, auditable, and every state change is traceable — the correct architecture for safety-critical surgical systems.
+**Why optical flow for force proxy:** SOFA's `BlockGaussSeidelConstraintSolver` stores contact forces internally — not accessible via `MechanicalObject.force`. Farneback dense optical flow measures tissue deformation directly from the camera frame, matching the visual judgement surgeons make. Medtronic Touch Surgery and NVIDIA Holoscan use this approach in real systems.
 
-**Why Phase 3B result (0% goal rate) is scientifically correct:** The Phase 3B result is not a failure — it is a controlled experiment that isolates the observation gap. Every other variable (algorithm, curriculum, reward, physics) is held constant. The 100% → 0% regression is attributable entirely to removal of `goal_xyz`. This is a publishable finding that most surgical RL papers avoid reporting honestly.
+**Why Phase 3B result (0% goal rate) is scientifically correct:** Every variable except `goal_xyz` is held constant. The 100% → 0% regression is attributable entirely to removal of goal coordinate availability. This is a publishable finding that most surgical RL papers avoid reporting honestly.
+
+**Why not LLM planner:** LLM-based planners are stochastic and non-deterministic. They cannot be validated under IEC 62304 or ISO 14971. BT transitions are deterministic, auditable, and every state change is traceable — the correct architecture for safety-critical surgical systems.
 
 ---
 
@@ -442,7 +512,11 @@ python scripts/train_ppo_visual.py
 
 > Scheikl et al. (2023). *LapGym — An Open Source Framework for Reinforcement Learning in Robot-Assisted Laparoscopic Surgery.* JMLR 24. [arXiv:2302.09606](https://arxiv.org/abs/2302.09606)
 
-This project extends Pore et al. by implementing three-phase curriculum learning, building a full surgical perception pipeline, documenting the observation gap quantitatively, building a visual force proxy for force-sensorless robots, and constructing the full ROS 2 + BT stack toward certifiable supervised autonomy.
+> Hannaford et al. (2018). *Behavior Trees as a Representation for Medical Procedures.* ICRA 2018.
+
+> Tagliabue et al. (2021). *Learning from Demonstrations for Autonomous Soft-tissue Retraction.* [arXiv:2110.00336](https://arxiv.org/abs/2110.00336)
+
+This project extends Pore et al. by implementing three-phase curriculum learning, building a full surgical perception pipeline, documenting the observation gap quantitatively, building a visual force proxy for force-sensorless robots, and constructing the full ROS 2 + BT + human-in-the-loop stack toward certifiable supervised autonomy.
 
 ---
 
@@ -455,10 +529,12 @@ This project extends Pore et al. by implementing three-phase curriculum learning
 | RAM | 16 GB |
 | Python | 3.10.12 |
 | SOFA | v25.12.00 |
+| ROS 2 | Humble Hawksbill |
 | PyTorch | 2.10.0+cu128 |
 | Stable-Baselines3 | 2.7.1 |
 | Gymnasium | 1.2.3 |
 | OpenCV | 4.x |
+| py_trees_ros | 2.x |
 | Weights & Biases | 0.25.1 |
 
 ---
@@ -468,10 +544,10 @@ This project extends Pore et al. by implementing three-phase curriculum learning
 **Subhash Arockiadoss**
 MSc Mechatronics and Robotics, De Montfort University Leicester (2024)
 
-[LinkedIn](https://www.linkedin.com/in/subhasharockiadoss-2092b8171) · [GitHub](https://github.com/SUBHASH-Hub) · [W&B Phase 2](https://wandb.ai/subhashtronics-de-montfort-university-leicester/surgical-rl-phase2) · [W&B Phase 3](https://wandb.ai/subhashtronics-de-montfort-university-leicester/surgical-rl-phase3)
+[LinkedIn](https://www.linkedin.com/in/subhasharockiadoss-2092b8171) · [GitHub](https://github.com/SUBHASH-Hub) · [W&B Phase 2](https://api.wandb.ai/links/subhashtronics-de-montfort-university-leicester/kqbip2vh) · [W&B Phase 3](https://api.wandb.ai/links/subhashtronics-de-montfort-university-leicester/0g3z7ei6)
 
-*Seeking visa-sponsored roles in surgical robotics AI and medical robotics in the UK.*
+*Seeking roles in surgical robotics AI and medical robotics — Open to sponsorship.*
 
 ---
 
-*Phase 1 ✅ complete · Phase 2 ✅ complete · Phase 3 ✅ complete · Phase 4 🔄 planned · May 2026*
+*Phase 1 ✅ · Phase 2 ✅ · Phase 3 ✅ · Phase 4 ✅ · Phase 5 📋 planned · May 2026*
