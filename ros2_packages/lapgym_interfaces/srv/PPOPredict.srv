@@ -1,0 +1,6 @@
+# Request — C++ sends current observation to Python PPO server
+float32[7] observation    # 7D obs: tool_xyz + goal_xyz + phase
+---
+# Response — Python returns predicted action
+float32[3] action         # xyz delta action [-3, 3]
+bool success              # False if policy not loaded

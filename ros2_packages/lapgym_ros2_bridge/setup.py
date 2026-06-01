@@ -30,6 +30,9 @@ setup(
             'hold_policy_server = lapgym_ros2_bridge.hold_policy_server:main',
             'surgical_bt_node = lapgym_ros2_bridge.surgical_bt_node:main',
             'safety_watchdog_node = lapgym_ros2_bridge.safety_watchdog_node:main',
+            'surgeon_console = lapgym_ros2_bridge.surgeon_console:main',
+            'sofa_step_service = lapgym_ros2_bridge.sofa_step_service:main',
+            'ppo_predict_service = lapgym_ros2_bridge.ppo_predict_service:main',
         ],
     },
 )

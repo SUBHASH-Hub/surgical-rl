@@ -19,6 +19,7 @@ find_package(lapgym_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 
 # -- Executable -------------------------------------------------------------
+# -- Approach server -------------------------------------------------------
 add_executable(approach_policy_server_cpp
   src/approach_policy_server.cpp
 )
@@ -38,4 +39,24 @@ install(TARGETS approach_policy_server_cpp
   DESTINATION lib/${PROJECT_NAME}
 )
 
+
+# -- Hold server -----------------------------------------------------------
+add_executable(hold_policy_server_cpp
+  src/hold_policy_server.cpp
+)
+ament_target_dependencies(hold_policy_server_cpp
+  rclcpp rclcpp_action lapgym_interfaces std_msgs)
+install(TARGETS hold_policy_server_cpp
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# -- Retract server --------------------------------------------------------
+add_executable(retract_policy_server_cpp
+  src/retract_policy_server.cpp
+)
+ament_target_dependencies(retract_policy_server_cpp
+  rclcpp rclcpp_action lapgym_interfaces std_msgs)
+install(TARGETS retract_policy_server_cpp
+  DESTINATION lib/${PROJECT_NAME}
+)
 ament_package()
