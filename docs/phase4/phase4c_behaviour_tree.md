@@ -1,172 +1,166 @@
-# Phase 4C — Behaviour Tree Supervised Autonomy
+# Phase 4C/4G — Behaviour Tree Supervised Autonomy
+
+**Updated: Phase 4G — action names updated to C++ servers**
+
+---
 
 ## Overview
 
 Phase 4C implements supervised autonomy using a py_trees Behaviour Tree
-that orchestrates all three Phase 4B action servers in sequence with
-simultaneous safety monitoring via tissue force.
+that orchestrates all three action servers in sequence with simultaneous
+safety monitoring via tissue force.
 
-This phase replicates the core architecture of real surgical robot systems
-such as Versius (CMR Surgical) and Hugo (Medtronic) — autonomous execution
-with human oversight and instant cancellation at any point.
+**Phase 4G update:** The BT action names were changed from Python server
+names to C++ server names after the action servers were ported to C++
+in Phase 4F and 4G. The BT orchestration logic is unchanged — only the
+action server targets were updated.
+
+---
+
+## Why the BT Action Names Were Changed
+
+### The Engineering Reason
+
+When the action servers were ported to C++ in Phase 4F/4G, the new C++
+servers registered under different action names (`_cpp` suffix):
+
+```
+Python servers (Phase 4B):     C++ servers (Phase 4F/4G):
+/approach_policy           →   /approach_policy_cpp
+/retract_policy            →   /retract_policy_cpp
+/hold_policy               →   /hold_policy_cpp
+```
+
+The `_cpp` suffix was kept deliberately — it distinguishes the C++
+implementation from the Python baseline and prevents confusion if both
+are ever run simultaneously for testing.
+
+### Why Change BT Config Not Executable Name
+
+Two options existed to make the BT use C++ servers:
+
+**Option A:** Rename C++ executables to match old Python names.
+Risk: impossible to tell Python and C++ versions apart in logs.
+
+**Option B:** Update BT action name strings to point to `_cpp` variants.
+Benefit: one-line change per server, clear intent, both implementations
+can coexist for testing.
+
+Option B was chosen. This is the correct production pattern — the BT is
+a configuration layer that can point to any compatible action server
+without changing the orchestration logic.
+
+---
 
 ## What Was Built
 
-### New files in `lapgym_ros2_bridge`
+### Files in `lapgym_ros2_bridge`
 
 **`action_leaf.py` — `ActionLeaf`**
-Reusable py_trees leaf that wraps any ROS 2 action server. On first tick
-sends a goal. On subsequent ticks returns RUNNING while server executes.
-Returns SUCCESS or FAILURE when server responds. If BT cancels the leaf,
-`cancel_goal()` is sent to the server immediately via `terminate()`.
+Reusable py_trees leaf that wraps any ROS 2 action server. Sends goal
+on first tick, returns RUNNING while executing, returns SUCCESS or FAILURE
+on completion. Calls `cancel_goal()` immediately via `terminate()`.
+Language-agnostic — works with both Python and C++ action servers.
 
 **`force_condition.py` — `ForceCondition`**
-py_trees condition leaf that subscribes to `/tissue_force_proxy` and
-monitors tissue force every BT tick. Returns FAILURE if force exceeds
-`FORCE_ALERT_THRESHOLD = 0.35` for 3 consecutive readings. Uses
-consecutive readings to avoid false positives from transient spikes.
+py_trees condition leaf subscribing to `/tissue_force_proxy`. Returns
+FAILURE if force exceeds 0.35 px/frame for 3 consecutive readings.
 
 **`surgical_bt_node.py` — `SurgicalBTNode`**
-Main ROS 2 node that builds and ticks the behaviour tree at 10 Hz.
-Prints tree structure on startup. Cancels tick timer when root returns
-SUCCESS or FAILURE.
+Builds and ticks the behaviour tree at 10 Hz. Updated in Phase 4G:
+action names changed to `_cpp` variants.
 
-## Behaviour Tree Structure
+---
+
+## Behaviour Tree Structure (Phase 4G — C++ servers)
+
+```
 {-} Root               [Sequence]
 /_/ SafetyMonitor  [Parallel - SuccessOnSelected(SurgicalSequence)]
-{-} SurgicalSequence  [Sequence]
---> Approach      [ActionLeaf -> /approach_policy]
---> Retract       [ActionLeaf -> /retract_policy]
---> Hold          [ActionLeaf -> /hold_policy]
---> ForceWatchdog     [ForceCondition -> /tissue_force_proxy]
+    {-} SurgicalSequence  [Sequence]
+        --> Approach   [ActionLeaf -> /approach_policy_cpp]  ← C++ rclcpp
+        --> Retract    [ActionLeaf -> /retract_policy_cpp]   ← C++ rclcpp
+        --> Hold       [ActionLeaf -> /hold_policy_cpp]      ← C++ rclcpp
+    --> ForceWatchdog  [ForceCondition -> /tissue_force_proxy]
+```
 
-### Node type reference
+The BT is language-agnostic. The ActionLeaf sends goals via the standard
+ROS 2 action protocol — it does not know or care whether the server is
+Python or C++. Only the action name string changed.
 
-| Symbol | Type | Behaviour |
-|---|---|---|
-| `{-}` | Sequence | Runs children left to right, stops on first FAILURE |
-| `/_/` | Parallel | Runs all children simultaneously |
-| `-->` | Leaf | Action or Condition |
+---
 
-### Parallel policy
+## Why BT Stays Python Despite C++ Servers
 
-`SuccessOnSelected(children=[SurgicalSequence])` — the parallel node
-succeeds when `SurgicalSequence` succeeds. If `ForceWatchdog` returns
-FAILURE, the parallel node fails immediately, which causes the active
-`ActionLeaf.terminate()` to fire, which sends `cancel_goal()` to the
-active action server.
+The BT orchestration layer stays Python for three reasons:
+
+**1. py_trees_ros has no C++ equivalent** — the library is Python-only.
+Reimplementing BT orchestration in C++ would require writing a custom BT
+framework — significant effort with no safety or performance benefit since
+BT ticks are 10Hz with no blocking calls (GIL not an issue).
+
+**2. BT logic has no blocking calls** — the GIL problem (the reason action
+servers moved to C++) does not apply to BT ticks. Each tick is < 1ms.
+
+**3. Correct separation of concerns** — orchestration (what to do) in
+Python, execution (how to do it) in C++. This matches how CMR Surgical
+and Medtronic separate their planning and control layers.
+
+---
 
 ## Safety Architecture
 
-### ForceCondition vs Phase 4D SafetyWatchdog
+### Two Independent Layers
 
-| Property | ForceCondition (4C) | SafetyWatchdog (4D) |
-|---|---|---|
-| Location | Inside BT | Independent process |
-| Check rate | 10 Hz (BT tick rate) | 50 Hz |
-| BT dependency | Stops if BT crashes | Independent of BT |
-| Scope | Cancels active leaf | Publishes /emergency_stop |
-| Standard | Software safety | IEC 62304 safety layer |
+| Property | ForceCondition (BT — Phase 4C) | SafetyWatchdogNode (Phase 4D) |
+|----------|-------------------------------|-------------------------------|
+| Language | Python | Python |
+| Process | Inside BT (same PID) | Independent PID |
+| Check rate | 10 Hz (BT tick) | 50 Hz (own timer) |
+| BT dependency | Dies if BT crashes | Survives BT crash |
+| Scope | cancel_goal() on active C++ server | /emergency_stop → all halt |
+| Standard | Application safety | IEC 62304 independent |
 
-ForceCondition provides application-level safety. Phase 4D adds the
-hardware-level independent safety layer required by IEC 62304.
+The C++ servers subscribe to `/emergency_stop` via their dedicated
+stop_callback_group — the emergency stop fires in parallel with any
+ongoing sofaStep() service call, no GIL conflict.
+
+---
 
 ## Verified Results
 
-### Full autonomous procedure — end to end
-Phase 1: Approach
-Server:      ApproachPolicyServer
-Steps:       258
-Start dist:  177.2mm
-End dist:    24.8mm
-Result:      goal_reached
-Phase 2: Retract
-Server:      RetractPolicyServer (Phase 2D PPO)
-Steps:       98
-Start dist:  28.0mm
-End dist:    2.5mm
-Result:      goal_reached
-Phase 3: Hold
-Server:      HoldPolicyServer
-Steps:       200
-Duration:    ~33 seconds
-Result:      timeout (expected success)
-Total procedure: ~98 seconds
-Final BT status: SUCCESS
-
-### Key observations
-
-The approach phase pre-positioned the instrument at 24.8mm. This meant
-the PPO retract agent only needed 98 steps instead of 175 steps in the
-Phase 4B standalone test — proving the two-server approach+retract
-architecture works as designed.
-
-The BT correctly sequenced all three servers automatically. No manual
-intervention was required between phases.
-
-## Dependencies installed
-
-```bash
-pip install py_trees==2.2.3
-pip install netifaces
-sudo apt-get install -y ros-humble-py-trees-ros
-sudo apt-get install -y ros-humble-py-trees-ros-interfaces
+### Phase 4C — Python server baseline
+```
+Approach: goal_reached steps=258 dist=24.8mm
+Retract:  goal_reached steps=98  dist=2.5mm
+Hold:     timeout      steps=200
+BT ROOT:  SUCCESS  (~98 seconds total)
 ```
 
-## Running Phase 4C (development mode — 5 terminals)
+### Phase 4G — C++ servers (hybrid architecture)
+```
+Approach: goal_reached steps=72  dist=24.4mm  (C++ approach_policy_cpp)
+Retract:  goal_reached steps=118 dist=29.5mm  (C++ retract_policy_cpp)
+Hold:     emergency_stop steps=83             (E key pressed — correct)
+BT ROOT:  FAILED (correct — E key = dangerous event)
+```
+
+**Stop latency improvement:**
+```
+Phase 4C (Python): ~15-20 steps × 65ms = ~1-1.3 seconds
+Phase 4G (C++):    ~1-2  steps × 65ms = ~65-130ms
+Improvement: 10× faster
+```
+
+---
+
+## Running the Full System (Phase 4G)
 
 ```bash
-# Terminal 1 -- bridge (force proxy source)
 source ~/surgical_robot_lapgym_ws/activate.sh
 cd ~/surgical_robot_lapgym_ws/surgical-rl
-ros2 run lapgym_ros2_bridge bridge_node --ros-args -p render_mode:=headless
-
-# Terminal 2 -- approach server
-ros2 run lapgym_ros2_bridge approach_policy_server
-
-# Terminal 3 -- retract server
-ros2 run lapgym_ros2_bridge retract_policy_server
-
-# Terminal 4 -- hold server
-ros2 run lapgym_ros2_bridge hold_policy_server
-
-# Terminal 5 -- behaviour tree (start last)
-ros2 run lapgym_ros2_bridge surgical_bt_node
-```
-
-Wait for all four servers to print `ready` before starting Terminal 5.
-
-## Launch file — one command start
-
-`launch/surgical_system.launch.py` starts all 5 nodes simultaneously:
-
-```bash
 ros2 launch lapgym_ros2_bridge surgical_system.launch.py
 ```
 
-The BT node is delayed by 15 seconds via `TimerAction` to allow all four
-SOFA environments to initialise before the first tick.
-
-**Note on GUI:** The launch file includes `bridge_node` which opens the
-SOFA GUI when `render_mode:=human`. However the GUI shows the bridge's
-own environment which is idle — the actual surgical procedure runs inside
-the action servers' headless environments. The bridge is included for
-`/tissue_force_proxy` publishing which the ForceWatchdog monitors.
-
-**Verified launch result (headless):**
-```
-Approach: goal_reached steps=150 dist=24.5mm
-Retract:  goal_reached steps=150 dist=2.9mm
-Hold:     timeout      steps=200
-BT ROOT:  SUCCESS
-```
-
-## Roadmap
-
-| Phase | Description | Status |
-|---|---|---|
-| 4A | Teleop + HUD guidance | COMPLETE |
-| 4B | PPO policy action servers | COMPLETE |
-| 4C | Behaviour Tree (launch file pending) | IN PROGRESS |
-| 4D | Independent safety watchdog (IEC 62304) | NEXT |
-| 4E | Surgeon console terminal (stop/resume) | PLANNED |
+The BT starts after 20s delay (increased from 15s to allow C++ server
+and Python service initialisation before first tick).
