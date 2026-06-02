@@ -5,9 +5,9 @@ Tree structure:
   Root [Sequence]
     SafetyMonitor [Parallel - fail if watchdog fails]
       SurgicalSequence [Sequence]
-        Approach  [ActionLeaf -> /approach_policy]
-        Retract   [ActionLeaf -> /retract_policy]
-        Hold      [ActionLeaf -> /hold_policy]
+        Approach  [ActionLeaf -> /approach_policy_cpp]
+        Retract   [ActionLeaf -> /retract_policy_cpp]
+        Hold      [ActionLeaf -> /hold_policy_cpp]
       ForceWatchdog [ForceCondition -> /tissue_force_proxy]
 
 The BT ticks at 10 Hz. If ForceCondition returns FAILURE:
@@ -40,19 +40,19 @@ def create_surgical_tree(node) -> py_trees.trees.BehaviourTree:
 
     approach = ActionLeaf(
         name='Approach',
-        action_name='approach_policy',
+        action_name='approach_policy_cpp',
         node=node,
         max_steps=400.0)
 
     retract = ActionLeaf(
         name='Retract',
-        action_name='retract_policy',
+        action_name='retract_policy_cpp',
         node=node,
         max_steps=300.0)
 
     hold = ActionLeaf(
         name='Hold',
-        action_name='hold_policy',
+        action_name='hold_policy_cpp',
         node=node,
         max_steps=200.0)
 

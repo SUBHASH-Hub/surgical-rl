@@ -1,9 +1,9 @@
 # Phase 4 — ROS 2 Supervised Autonomy: Complete Overview
 
-**Repository:** github.com/SUBHASH-Hub/surgical-rl  
-**Author:** Subhash Arockiadoss  
-**Platform:** Ubuntu 22.04, ROS 2 Humble, SOFA Framework  
-**Status:** Phase 4A–4D complete. Phase 4E (surgeon console) in progress.
+**Repository:** github.com/SUBHASH-Hub/surgical-rl
+**Author:** Subhash Arockiadoss
+**Platform:** Ubuntu 22.04, ROS 2 Humble, SOFA Framework
+**Status:** Phase 4A–4G complete. IEC 62304 design history complete.
 
 ---
 
@@ -16,11 +16,15 @@ Phases 1–3 produced:
 - A trained PPO tissue retraction policy (Phase 2)
 - A surgical perception pipeline with tissue segmentation (Phase 3)
 
-Phase 4 deploys the Phase 2 PPO policy as a real-time autonomous controller
+Phase 4 deploys the Phase 2D PPO policy as a real-time autonomous controller
 orchestrated by a Behaviour Tree, monitored by an independent safety watchdog,
 and operated via a single launch command — replicating the architecture of
 production surgical robot systems such as Versius (CMR Surgical) and Hugo
 (Medtronic).
+
+Phase 4F and 4G extended this by porting the action servers to C++ and
+introducing the hybrid C++/Python pattern — C++ for control logic (no GIL,
+true parallel threads), Python for ML/physics (PyTorch GPU, SOFA bindings).
 
 ---
 
@@ -32,182 +36,227 @@ cd ~/surgical_robot_lapgym_ws/surgical-rl
 ros2 launch lapgym_ros2_bridge surgical_system.launch.py
 ```
 
-This starts 6 nodes simultaneously. The system performs a complete autonomous
-tissue retraction procedure and halts cleanly.
+This starts 9 nodes simultaneously. The system performs a complete autonomous
+tissue retraction procedure with surgeon console human-in-the-loop control.
 
 ---
 
-## System Architecture
-┌─────────────────────────────────────────────────────────┐
-│                    One Launch Command                    │
-└─────────────────────────────────────────────────────────┘
-│
-┌──────────────────┼──────────────────┐
-│                  │                  │
-┌───────▼──────┐  ┌────────▼───────┐  ┌──────▼────────────┐
-│ SOFA Bridge  │  │ Behaviour Tree  │  │ Safety Watchdog   │
-│ bridge_node  │  │ surgical_bt_node│  │ safety_watchdog   │
-│ 50 Hz        │  │ 10 Hz ticks     │  │ 50 Hz independent │
-│              │  │                 │  │ IEC 62304 Class B │
-└───────┬──────┘  └────────┬────────┘  └──────┬────────────┘
-│                  │                  │
-│         ┌────────▼────────┐         │
-│         │  3 Action Servers│         │
-│         │                 │         │
-│    ┌────▼──┐ ┌──────┐ ┌───▼──┐      │
-│    │Approach│ │Retract│ │ Hold │      │
-│    │ Props  │ │ PPO  │ │ Zero │      │
-│    └────────┘ └──────┘ └──────┘      │
-│                                      │
-└────── /tissue_force_proxy ───────────┘
-/emergency_stop
+## System Architecture — Hybrid C++/Python (Phase 4G)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    One Launch Command                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+     ┌────────────────────────┼────────────────────────┐
+     │                        │                        │
+┌────▼──────────┐  ┌──────────▼──────────┐  ┌─────────▼──────────┐
+│ Python Layer  │  │  C++ Control Layer  │  │  Safety Layer      │
+│ (ML/Physics)  │  │  (rclcpp, no GIL)  │  │  (Python, 50Hz)    │
+│               │  │                     │  │                    │
+│ sofa_step_svc │  │ approach_policy_cpp │  │ safety_watchdog    │
+│ /sofa_step    │<-│ retract_policy_cpp  │  │ IEC 62304 Class B  │
+│               │  │ hold_policy_cpp     │  │ independent PID    │
+│ ppo_predict   │<-│ std::atomic<bool>   │  └────────────────────┘
+│ /ppo_predict  │  │ MultiThreadedExec   │
+│               │  │ callback groups     │
+│ sofa_bridge   │  └─────────────────────┘
+│ /tissue_force │
+│ /joint_states │
+└───────────────┘
+     │
+┌────▼──────────────────────────────────────────────────────────┐
+│  Orchestration Layer (Python — py_trees)                      │
+│  surgical_bt_node → Approach → Retract → Hold sequence        │
+│  ForceCondition guard → application-level safety              │
+└───────────────────────────────────────────────────────────────┘
+     │
+┌────▼──────────────────────────────────────────────────────────┐
+│  Human Interface (Python — curses)                            │
+│  surgeon_console → S/R/E/Q · live telemetry display          │
+└───────────────────────────────────────────────────────────────┘
+```
+![Phase 4G System Architecture](images/phase4g_architecture.svg)
+---
+
+## Why the Hybrid C++/Python Architecture
+
+### The Problem with Python-Only (Phase 4A–4E)
+
+In the original Python action servers, `env.step()` is a ~65ms synchronous
+SOFA blocking call. The Python GIL (Global Interpreter Lock) forces one
+thread at a time. During `env.step()`, the GIL is held and no callback
+can fire — including the surgeon stop callback.
+
+Result: surgeon presses S → instrument keeps moving for up to 15-20 steps
+before stop is processed.
+
+### The C++ Solution (Phase 4F–4G)
+
+C++ has no GIL. Threads run truly in parallel on separate CPU cores.
+`std::atomic<bool>` provides safe shared state between parallel threads.
+
+```
+Python problem:          C++ solution:
+env.step() holds GIL     sofaStep() on Thread A
+→ ALL threads frozen     → stop_callback on Thread B (independent)
+→ stop delayed 15-20     → std::atomic flag set immediately
+  steps (~1 second)      → stop within 1-2 steps (~130ms)
+```
+
+### Why PPO and SOFA Stay in Python
+
+PyTorch releases the GIL before GPU computation (CUDA kernels). So PPO
+inference does NOT block other threads — it is already fast. SOFA has
+Python bindings (SofaPython3) — no C++ application interface exists.
+
+The correct split:
+```
+C++ for:    action server logic, threading, stop flags, control loop
+Python for: PPO inference (PyTorch/GPU), SOFA physics (SofaPython3)
+            py_trees BT (no C++ ROS2 equivalent), curses console
+```
+
+This is the same hybrid pattern used by Intuitive Surgical, CMR Surgical,
+and Moon Surgical in their production systems.
 
 ---
 
-## Complete Node Table
+## Complete Node Table (Phase 4G)
 
-| Node | Executable | Role | Phase |
-|---|---|---|---|
-| `sofa_bridge_node` | `bridge_node` | SOFA simulation + `/tissue_force_proxy` | 4A |
-| `teleop_keyboard` | `teleop_keyboard` | Human teleoperation + HUD guidance | 4A |
-| `approach_policy_server` | `approach_policy_server` | Proportional controller to grasping zone | 4B |
-| `retract_policy_server` | `retract_policy_server` | Phase 2D PPO tissue retraction policy | 4B |
-| `hold_policy_server` | `hold_policy_server` | Zero-action position hold | 4B |
-| `surgical_bt_node` | `surgical_bt_node` | Behaviour Tree orchestrator | 4C |
-| `safety_watchdog_node` | `safety_watchdog_node` | Independent force monitor IEC 62304 | 4D |
-| `policy_test_client` | `policy_test_client` | One-shot test utility | 4B |
+| Node | Language | Role | Hz | Phase |
+|------|----------|------|-----|-------|
+| `sofa_bridge_node` | Python | SOFA↔ROS2 bridge | 50 | 4A |
+| `sofa_step_service` | Python | SOFA env.step() service for C++ servers | on-demand | 4F |
+| `ppo_predict_service` | Python | PPO policy.predict() service for C++ retract | on-demand | 4G |
+| `approach_policy_server_cpp` | **C++** | Proportional controller to grasping zone | ~15 | 4F |
+| `retract_policy_server_cpp` | **C++** | PPO retract via /ppo_predict + /sofa_step | ~15 | 4G |
+| `hold_policy_server_cpp` | **C++** | Zero-action position hold | ~10 | 4G |
+| `safety_watchdog_node` | Python | IEC 62304 independent force monitor | 50 | 4C/4D |
+| `surgical_bt_node` | Python | Behaviour tree orchestrator | 10 | 4D |
+| `surgeon_console` | Python | Human-in-the-loop terminal UI | 10 | 4E |
+
+**Why safety_watchdog stays Python:** Already meets 60ms target (industry
+target 100ms). Has no blocking calls — GIL is not an issue. Porting would
+add complexity with no measurable safety improvement.
+
+**Why surgical_bt stays Python:** py_trees_ros has no C++ equivalent. BT
+orchestration has no blocking calls — GIL not an issue at 10Hz tick rate.
 
 ---
 
-## Behaviour Tree Structure
-{-} Root
+## Behaviour Tree — Updated Action Names (Phase 4G)
+
+```
+{-} Root               [Sequence]
 /_/ SafetyMonitor  [Parallel]
-{-} SurgicalSequence  [Sequence]
---> Approach   [/approach_policy action server]
---> Retract    [/retract_policy action server]
---> Hold       [/hold_policy   action server]
---> ForceWatchdog [/tissue_force_proxy subscriber]
+    {-} SurgicalSequence  [Sequence]
+        --> Approach   [ActionLeaf -> /approach_policy_cpp]  ← C++
+        --> Retract    [ActionLeaf -> /retract_policy_cpp]   ← C++
+        --> Hold       [ActionLeaf -> /hold_policy_cpp]      ← C++
+    --> ForceWatchdog  [ForceCondition -> /tissue_force_proxy]
+```
 
-The BT orchestrates three action servers sequentially. The Parallel node runs
-ForceWatchdog simultaneously — if force exceeds threshold the active leaf is
-cancelled via `cancel_goal()`.
+**Why action names changed:** The C++ servers register different action
+names (`_cpp` suffix) to distinguish them from Python versions. The BT
+was updated to point to the C++ action names in Phase 4G. This is the
+correct pattern — changing the BT config rather than renaming the
+executable prevents confusion between Python and C++ implementations.
 
 ---
 
 ## Defence in Depth — Two Independent Safety Layers
-Layer 1 (Application)  — ForceCondition
-Process:     Inside BT (surgical_bt_node)
-Check rate:  10 Hz
-Threshold:   0.35 (ALERT), 3 consecutive readings
-Action:      cancel_goal() on active action server
-Standard:    Application safety
-Layer 2 (Independent)  — SafetyWatchdogNode
-Process:     Independent PID (separate from BT)
-Check rate:  50 Hz
-Threshold:   0.35 (ALERT), 1.0 (STOP, 3 consecutive readings = 60ms)
-Action:      publish /emergency_stop=True → all nodes halt
-Standard:    IEC 62304 Class B architectural independence
+
+```
+Layer 1 (Application)  — ForceCondition in surgical_bt_node
+  Process:    Inside BT (same PID as BT)
+  Check rate: 10 Hz (BT tick)
+  Threshold:  0.35 px/frame × 3 consecutive readings
+  Action:     cancel_goal() on active C++ action server
+  Standard:   Application safety
+
+Layer 2 (Independent)  — safety_watchdog_node
+  Process:    Independent PID (separate from BT and all C++ servers)
+  Check rate: 50 Hz (own timer — no blocking calls)
+  Threshold:  1.0 px/frame × 3 consecutive readings = 60ms
+  Action:     publish /emergency_stop=True → all nodes halt
+  Standard:   IEC 62304 Class B architectural independence
+```
 
 Both layers must fail simultaneously for a dangerous condition to go
-undetected. This is defence in depth — the same principle used in
-aircraft fly-by-wire systems and certified medical devices.
+undetected — defence in depth per IEC 62304.
 
 ---
 
-## Verified Surgical Procedure Results
+## IEC 62304 Compliance (Phase 4E/4G)
 
-All results from `ros2 launch lapgym_ros2_bridge surgical_system.launch.py`:
+The system was brought into IEC 62304 Class C compliance framework in
+Phase 4E (docs) and Phase 4G (C++ implementation).
 
-| Phase | Server | Steps | Start dist | End dist | Result |
-|---|---|---|---|---|---|
-| Approach | ApproachPolicyServer | 123–179 | ~120mm | 24mm | goal_reached |
-| Retract | RetractPolicyServer (PPO) | 98–155 | ~100mm | 2.4–2.9mm | goal_reached |
-| Hold | HoldPolicyServer | 200 | 0mm | 0mm | timeout/SUCCESS |
+**Design history file location:** `docs/iec62304/`
 
-**BT ROOT: SUCCESS — total procedure ~75 seconds**
+| Document | ID | Content |
+|---------|-----|---------|
+| Software Development Plan | SDP-001 | Lifecycle, tools, problem resolution |
+| Software Requirements Spec | SRS-001 | 56 numbered requirements FR/SR/PR |
+| Software Architecture Doc | SAD-001 | 5-layer decomposition, safety argument |
+| SOUP Analysis | SOUP-001 | 12 SOUP items, GIL anomaly documented |
+| Risk Management File | RMF-001 | 6 risks, all mitigated to ALARP |
+| Traceability Matrix | TRACEABILITY-001 | Req → code → test evidence |
 
-Retract PPO consistently achieved sub-3mm final distance.
-The approach pre-positioning reduced retract steps from 175 (standalone)
-to 98–137 steps — proving the two-server architecture works as designed.
+**System classification: IEC 62304 Class C**
+Rationale: autonomous surgical instrument control — injury possible if
+safety layer fails silently.
+
+**Git tag:** `v4.7-phase4e-iec62304`
 
 ---
 
-## IEC 62304 Emergency Stop — Verified Results
+## Verified Results (Phase 4G Hybrid System)
 
-Force injection test during Hold phase:
-t=0ms    Force injected: 1.500 (above STOP threshold 1.0)
-t=60ms   Watchdog triggered: 3 consecutive readings at 50Hz
-t=~80ms  /emergency_stop=True published
-t=~100ms bridge_node halted: EMERGENCY STOP received
-Watchdog heartbeat continued throughout
-Watchdog state=STOP maintained until force resolved
+Full procedure from `ros2 launch lapgym_ros2_bridge surgical_system.launch.py`:
 
-Response time: 60ms from force onset to emergency stop.
-Industry target: 100ms. We achieved 60ms. ✓
+| Phase | Server | Steps | End dist | Result |
+|-------|--------|-------|---------|--------|
+| Approach | approach_policy_server_cpp | 72 | 24.4mm | goal_reached |
+| Retract | retract_policy_server_cpp | 118 | 29.5mm | goal_reached |
+| Hold | hold_policy_server_cpp | 83 | 0.0mm | emergency_stop (E key) |
+
+**Stop latency comparison:**
+```
+Python servers (Phase 4E):  15-20 steps × 65ms = ~1-1.3 seconds
+C++ servers (Phase 4G):     1-2 steps × 65ms   = ~65-130ms
+Improvement:                10× faster stop response
+```
+
+**Safety watchdog: NOMINAL throughout — uptime logged every 10s**
+
+---
+
+## Complete Phase 4 Git Tags
+
+| Tag | Description |
+|-----|-------------|
+| `v4.0-phase4a-complete` | ROS2 bridge, coordinate mapping, teleop |
+| `v4.1-phase4b-complete` | Action servers (Python — baseline) |
+| `v4.2-phase4c-complete` | Safety watchdog at 50Hz |
+| `v4.4-phase4d-complete` | Behaviour tree orchestration |
+| `v4.5-phase4e-complete` | Surgeon console S/R/E |
+| `v4.6-phase4f-cpp` | C++ approach server — fills C++ gap |
+| `v4.7-phase4e-iec62304` | IEC 62304 design history file |
+| `v4.8-phase4g-cpp` | C++ hold + retract servers |
+| `v4.9-phase4g-hybrid-launch` | Hybrid launch + BT action names updated |
 
 ---
 
 ## Phase Breakdown
 
-| Phase | Description | Tag | Key Files |
-|---|---|---|---|
-| 4A | ROS 2 bridge + HUD teleop guidance | v4.1 | `bridge_node.py`, `teleop_keyboard.py` |
-| 4B | PPO policy action servers | v4.2 | `retract_policy_server.py`, `approach_policy_server.py`, `hold_policy_server.py` |
-| 4C | Behaviour Tree + launch file | v4.3 | `surgical_bt_node.py`, `action_leaf.py`, `force_condition.py`, `surgical_system.launch.py` |
-| 4D | Independent safety watchdog | v4.4 | `safety_watchdog_node.py` |
-| 4E | Surgeon console terminal | planned | `surgeon_console.py` |
-
----
-
-## ROS 2 Topics Map
-
-| Topic | Type | Publisher | Subscribers | Rate |
-|---|---|---|---|---|
-| `/tissue_force_proxy` | Float32 | bridge_node | safety_watchdog, surgical_bt (ForceCondition) | 50 Hz |
-| `/emergency_stop` | Bool | safety_watchdog | bridge_node, all action servers | on event |
-| `/joint_target` | Float32MultiArray | teleop_keyboard | bridge_node | 10 Hz |
-| `/joint_states` | JointState | bridge_node | teleop_keyboard (HUD) | 50 Hz |
-| `/guidance` | Float32MultiArray | bridge_node | teleop_keyboard (HUD) | 50 Hz |
-| `/watchdog_status` | String | safety_watchdog | surgeon console (Phase 4E) | 50 Hz |
-| `/watchdog_heartbeat` | Bool | safety_watchdog | surgeon console (Phase 4E) | 1 Hz |
-
----
-
-## Why Phase 2 PPO and Not Phase 3 Perception
-
-Phase 3 produces segmentation masks (pixel output).
-Phase 2 PPO consumes a 7-number state vector (position input).
-These formats are incompatible without a perception-to-control bridge.
-
-Connecting them requires: stereo depth estimation, coordinate frame
-transforms, and policy fine-tuning with noisy observations — a complete
-research project. This is documented as future work.
-
-Phase 4 demonstrates the **control infrastructure** — the ROS 2 action
-server interface that any future controller (PPO, classical, or
-perception-driven) can plug into without changing the orchestration layer.
-
----
-
-## What Comes Next — Phase 4E Surgeon Console
-
-Phase 4E builds a terminal-based surgeon console that replicates the
-physical deadman switch interface of real surgical robot consoles:
-
-- Live dashboard: force, distance, phase, step count, watchdog status
-- `S` key: stop — sends cancel_goal() to active server, Hold activates
-- `R` key: resume — sends new goal to continue from current position
-- `E` key: emergency stop — publishes /emergency_stop directly
-- `Q` key: quit — clean system shutdown
-
-This completes the supervised autonomy system with full human oversight.
-
----
-
-## Detailed Documentation
-
-- [Phase 4A — ROS 2 Bridge + HUD](phase4a_ros2_bridge.md)
-- [Phase 4B — PPO Policy Action Servers](phase4b_policy_action_server.md)
-- [Phase 4C — Behaviour Tree Supervised Autonomy](phase4c_behaviour_tree.md)
-- [Phase 4D — Independent Safety Watchdog](phase4d_safety_watchdog.md)
-- [Launch and Operations Guide](phase4_launch_guide.md)
+| Phase | Description | Language | Tag |
+|-------|-------------|----------|-----|
+| 4A | ROS 2 bridge + HUD teleop | Python | v4.0 |
+| 4B | PPO action servers (Python baseline) | Python | v4.1 |
+| 4C | Safety watchdog (IEC 62304) | Python | v4.2 |
+| 4D | Behaviour tree + launch file | Python | v4.4 |
+| 4E | Surgeon console + IEC 62304 docs | Python | v4.5/v4.7 |
+| 4F | C++ approach server — GIL gap fixed | **C++** | v4.6 |
+| 4G | C++ hold + retract + hybrid launch | **C++** | v4.8/v4.9 |
