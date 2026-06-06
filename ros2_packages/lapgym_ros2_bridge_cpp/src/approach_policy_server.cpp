@@ -1,5 +1,10 @@
 /**
- * Phase 4F: ApproachPolicyServer (C++)
+ * Phase 4F: ApproachPolicyServer (C++)&
+ * Phase 4H — C++ Engineering Depth:
+ * - Eigen refactor          ← correct vocabulary
+ * - ProportionalController  ← correct structure (RAII + class design)
+ * - Google Tests            ← correct verification (industry standard)
+ * - Step timing logs        ← correct awareness (real-time patterns)
  *
  * ROS 2 action server in C++ that navigates the surgical instrument
  * to the grasping zone using a proportional controller.
@@ -29,6 +34,7 @@
 #include <string>
 #include <functional>
 #include <future>
+#include <Eigen/Dense>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -37,10 +43,14 @@
 #include "lapgym_interfaces/action/retract.hpp"
 #include "lapgym_interfaces/srv/sofa_step.hpp"
 
-// Fixed grasping target in world metres (from Phase 4B analysis)
-static constexpr std::array<float, 3> GRASPING_TARGET = {
-    -0.0485583f, 0.0085f, 0.0356076f
-};
+// // Fixed grasping target in world metres (from Phase 4B analysis)
+// static constexpr std::array<float, 3> GRASPING_TARGET = {
+//     -0.0485583f, 0.0085f, 0.0356076f
+// };
+// Replace Fixed grasping targer in world meters (from Phase 4B analysis) t
+//           to the constexpr array
+const Eigen::Vector3f GRASPING_TARGET(-0.0485583f, 0.0085f, 0.0356076f);
+
 static constexpr float APPROACH_THRESHOLD = 0.025f;  // 25mm
 static constexpr float APPROACH_GAIN      = 2.0f;
 static constexpr int   DEFAULT_MAX_STEPS  = 400;
@@ -49,6 +59,31 @@ using Retract           = lapgym_interfaces::action::Retract;
 using SofaStep          = lapgym_interfaces::srv::SofaStep;
 using GoalHandleRetract = rclcpp_action::ServerGoalHandle<Retract>;
 
+// -- ProportionalController -----------------------------------------------
+// Encapsulates the approach proportional control algorithm.
+// Owns gain and action bound as member state — RAII pattern.
+// Replaces inline scalar arithmetic with Eigen vector operations.
+// KI=0, KD=0: pure proportional is sufficient for SOFA approach navigation.
+class ProportionalController
+{
+public:
+    ProportionalController(float gain, float max_action)
+    : gain_(gain), max_action_(max_action)
+    {}
+
+    Eigen::Vector3f compute(const Eigen::Vector3f& error)
+    {
+        return (error.normalized() * gain_)
+                .cwiseMax(-max_action_)
+                .cwiseMin( max_action_);
+    }
+
+    void reset() {}
+
+private:
+    float gain_;
+    float max_action_;
+};
 
 class ApproachPolicyServerCpp : public rclcpp::Node
 {
@@ -56,7 +91,8 @@ public:
     ApproachPolicyServerCpp()
     : Node("approach_policy_server_cpp"),
       surgeon_stopped_(false),
-      emergency_(false)
+      emergency_(false),
+      controller_(APPROACH_GAIN, 3.0f)   // ← add this line
     {
         // -- Action server -------------------------------------------------
         action_server_ = rclcpp_action::create_server<Retract>(
@@ -226,21 +262,62 @@ private:
                 if (goal_handle->is_canceling()) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
+            // // -- Get tool world position — zero-action probe step ----------
+            // auto state   = sofaStep({0.0f, 0.0f, 0.0f});
+            // float tool_x = state->tool_world_x;
+            // float tool_y = state->tool_world_y;
+            // float tool_z = state->tool_world_z;
 
-            // -- Get tool world position — zero-action probe step ----------
-            auto state   = sofaStep({0.0f, 0.0f, 0.0f});
-            float tool_x = state->tool_world_x;
-            float tool_y = state->tool_world_y;
-            float tool_z = state->tool_world_z;
+            // // -- Compute distance to grasping target -----------------------
+            // float ex   = GRASPING_TARGET[0] - tool_x;
+            // float ey   = GRASPING_TARGET[1] - tool_y;
+            // float ez   = GRASPING_TARGET[2] - tool_z;
+            // float dist = std::sqrt(ex*ex + ey*ey + ez*ez);
+            // final_distance = dist;
 
-            // -- Compute distance to grasping target -----------------------
-            float ex   = GRASPING_TARGET[0] - tool_x;
-            float ey   = GRASPING_TARGET[1] - tool_y;
-            float ez   = GRASPING_TARGET[2] - tool_z;
-            float dist = std::sqrt(ex*ex + ey*ey + ez*ez);
+            // // -- Check if close enough -------------------------------------
+            // if (dist < APPROACH_THRESHOLD) {
+            //     termination = "goal_reached";
+            //     RCLCPP_INFO(get_logger(),
+            //         "Approach complete at step %d dist=%.1fmm",
+            //         step, dist * 1000.0f);
+            //     break;
+            // }
+
+            // // -- Proportional controller -----------------------------------
+            // float norm = dist + 1e-8f;
+            // float ax = std::max(-3.0f, std::min(3.0f,
+            //             (ex / norm) * APPROACH_GAIN));
+            // float ay = std::max(-3.0f, std::min(3.0f,
+            //             (ey / norm) * APPROACH_GAIN));
+            // float az = std::max(-3.0f, std::min(3.0f,
+            //             (ez / norm) * APPROACH_GAIN));
+
+            // // -- Step SOFA physics with computed action --------------------
+            // auto result_step = sofaStep({ax, ay, az});
+            //------------------------------------------------------------------------------------------
+            // -- Get current tool position via zero-action probe step ----------
+            auto state = sofaStep({0.0f, 0.0f, 0.0f});
+
+            // -- Eigen: represent tool position as 3D vector ------------------
+            // Previously: 3 separate floats (tool_x, tool_y, tool_z)
+            // Now: one Vector3f — the type system enforces they belong together
+            Eigen::Vector3f tool(state->tool_world_x,
+                                state->tool_world_y,
+                                state->tool_world_z);
+
+            // -- Eigen: compute error vector (displacement toward target) -----
+            // Previously: ex = TARGET[0] - tool_x (manual per axis)
+            // Now: one subtraction — readable as mathematics
+            Eigen::Vector3f error = GRASPING_TARGET - tool;
+
+            // -- Eigen: magnitude = distance to target ------------------------
+            // Previously: std::sqrt(ex*ex + ey*ey + ez*ez)
+            // Now: error.norm() — same operation, self-documenting
+            float dist = error.norm();
             final_distance = dist;
 
-            // -- Check if close enough -------------------------------------
+            // -- Check goal reached -------------------------------------------
             if (dist < APPROACH_THRESHOLD) {
                 termination = "goal_reached";
                 RCLCPP_INFO(get_logger(),
@@ -248,18 +325,30 @@ private:
                     step, dist * 1000.0f);
                 break;
             }
+            // --------------------------------------------------------------------
+            // // -- Eigen: proportional controller action ------------------------
+            // // Previously: manual normalise + clip per axis (6 lines)
+            // // Now: normalised() gives unit vector, cwiseMax/Min clips bounds
+            // // Same algorithm — Eigen vocabulary makes intent clear
+            // Eigen::Vector3f action =
+            //     (error.normalized() * APPROACH_GAIN)
+            //     .cwiseMax(-3.0f)
+            //     .cwiseMin(3.0f);
+            // --------------------------------------------------------------------
 
-            // -- Proportional controller -----------------------------------
-            float norm = dist + 1e-8f;
-            float ax = std::max(-3.0f, std::min(3.0f,
-                        (ex / norm) * APPROACH_GAIN));
-            float ay = std::max(-3.0f, std::min(3.0f,
-                        (ey / norm) * APPROACH_GAIN));
-            float az = std::max(-3.0f, std::min(3.0f,
-                        (ez / norm) * APPROACH_GAIN));
+            // Replace the inline Eigen action in execute loop
 
-            // -- Step SOFA physics with computed action --------------------
-            auto result_step = sofaStep({ax, ay, az});
+            Eigen::Vector3f action = controller_.compute(error);
+
+            // -- Step timing + SOFA call -----------------------------------------
+            // Measures actual sofaStep() latency — demonstrates real-time awareness.
+            // RCLCPP_DEBUG only shows with --log-level debug (no normal output spam)
+            auto step_start  = std::chrono::steady_clock::now();
+            auto result_step = sofaStep({action.x(), action.y(), action.z()});
+            auto step_ms     = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - step_start).count();
+            RCLCPP_DEBUG(get_logger(),
+                "Step %d sofaStep took %ldms", step, step_ms);
             step++;
 
             // -- Post-step surgeon stop freeze loop ------------------------
@@ -394,7 +483,10 @@ private:
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr         emergency_sub_;
     std::shared_ptr<rclcpp::executors::SingleThreadedExecutor>   stop_executor_;
     std::thread                                                  stop_thread_;
+    // Proportional controller — owns gain and action bounds
+    ProportionalController                                       controller_;
 };
+
 
 
 // ---------------------------------------------------------------------------

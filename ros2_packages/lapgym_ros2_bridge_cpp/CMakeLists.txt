@@ -17,6 +17,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(lapgym_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 
 # -- Executable -------------------------------------------------------------
 # -- Approach server -------------------------------------------------------
@@ -31,6 +32,9 @@ ament_target_dependencies(approach_policy_server_cpp
   lapgym_interfaces
   std_msgs
 )
+#  For each executable to use Eigen
+target_link_libraries(approach_policy_server_cpp
+  Eigen3::Eigen)
 
 # -- Install ----------------------------------------------------------------
 # Copies executable to install/lapgym_ros2_bridge_cpp/lib/
@@ -60,3 +64,15 @@ install(TARGETS retract_policy_server_cpp
   DESTINATION lib/${PROJECT_NAME}
 )
 ament_package()
+# -- Google Tests -----------------------------------------------------------
+# Unit tests for ProportionalController — no ROS2 dependency required.
+# IEC 62304 Class C: unit verification of safety-relevant control logic.
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_proportional_controller
+    test/test_proportional_controller.cpp
+  )
+  target_link_libraries(test_proportional_controller
+    Eigen3::Eigen
+  )
+endif()
