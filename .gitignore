@@ -215,3 +215,4 @@ data/
 # Model weights: large binary files — reproduced by training scripts
 # Result files (.json/.txt/.csv) are small and ARE committed
 *.pth
+.~lock.*#
